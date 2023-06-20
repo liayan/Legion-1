@@ -1,148 +1,8 @@
-#include "GPUGraphStore.cuh"
-#include <algorithm>
-#include <functional>
-#include <iostream>
-#include <cuda_runtime.h>
+#include "storage_management.cuh"
+#include "storage_management_impl.cuh"
 
-#include <fstream>
-#include <string>
-#include <sstream>
-#include <vector>
-#include <unordered_map>
-#include <numeric>
-#include <math.h>
-#include <thread>
-#include <numeric>
-#include <chrono>
-#include <random>
 
-#include <cstdint>
-#include <sys/mman.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <time.h>
-#include <sys/types.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <sys/time.h>
-#include <time.h>
-
-void mmap_trainingset_read(std::string &training_file, std::vector<int32_t>& training_set_ids){
-    int64_t t_idx = 0;
-    int32_t fd = open(training_file.c_str(), O_RDONLY);
-    if(fd == -1){
-        std::cout<<"cannout open file: "<<training_file<<"\n";
-    }
-    // int64_t buf_len = lseek(fd, 0, SEEK_END);
-    int64_t buf_len = int64_t(int64_t(training_set_ids.size()) * 4); 
-    const int32_t* buf = (int32_t *)mmap(NULL, buf_len, PROT_READ, MAP_PRIVATE, fd, 0);
-    const int32_t* buf_end = buf + buf_len/sizeof(int32_t);
-    int32_t temp;
-    while(buf < buf_end){
-        temp = *buf;
-        training_set_ids[t_idx++] = temp;
-        buf++;
-    }
-    close(fd);
-    return;
-}
-
-int32_t mmap_partition_read(std::string &partition_file, int32_t* partition_index){
-    int64_t part_idx = 0;
-    int32_t fd = open(partition_file.c_str(), O_RDONLY);
-    // if(fd == -1){
-    //     std::cout<<"cannout open file: "<<partition_file<<"\n";
-    // }
-    int64_t buf_len = lseek(fd, 0, SEEK_END);
-    const int32_t* buf = (int32_t *)mmap(NULL, buf_len, PROT_READ, MAP_PRIVATE, fd, 0);
-    const int32_t* buf_end = buf + buf_len/sizeof(int32_t);
-    int32_t temp;
-    while(buf < buf_end){
-        temp = *buf;
-        partition_index[part_idx++] = temp;
-        buf++;
-    }
-    close(fd);
-    return fd;
-}
-
-void mmap_indptr_read(std::string &indptr_file, int64_t* indptr){
-    int64_t indptr_index = 0;
-    int32_t fd = open(indptr_file.c_str(), O_RDONLY);
-    if(fd == -1){
-        std::cout<<"cannout open file: "<<indptr_file<<"\n";
-    }
-    int64_t buf_len = lseek(fd, 0, SEEK_END);
-    const int64_t *buf = (int64_t *)mmap(NULL, buf_len, PROT_READ, MAP_PRIVATE, fd, 0);
-    const int64_t* buf_end = buf + buf_len/sizeof(int64_t);
-    int64_t temp;
-    while(buf < buf_end){
-        temp = *buf;
-        indptr[indptr_index++] = temp;
-        buf++;
-    }
-    close(fd);
-    return;
-}
-
-void mmap_indices_read(std::string &indices_file, int32_t* indices){
-    int64_t indices_index = 0;
-    int32_t fd = open(indices_file.c_str(), O_RDONLY);
-    if(fd == -1){
-        std::cout<<"cannout open file: "<<indices_file<<"\n";
-    }
-    int64_t buf_len = lseek(fd, 0, SEEK_END);
-    const int32_t *buf = (int32_t *)mmap(NULL, buf_len, PROT_READ, MAP_PRIVATE, fd, 0);
-    const int32_t* buf_end = buf + buf_len/sizeof(int32_t);
-    int32_t temp;
-    while(buf < buf_end){
-        temp = *buf;
-        indices[indices_index++] = temp;
-        buf++;
-    }
-    close(fd);
-    return;
-}
-
-void mmap_features_read(std::string &features_file, float* features){
-    int64_t n_idx = 0;
-    int32_t fd = open(features_file.c_str(), O_RDONLY);
-    if(fd == -1){
-        std::cout<<"cannout open file: "<<features_file<<"\n";
-    }
-    int64_t buf_len = lseek(fd, 0, SEEK_END);
-    const float *buf = (float *)mmap(NULL, buf_len, PROT_READ, MAP_PRIVATE, fd, 0);
-    const float* buf_end = buf + buf_len/sizeof(float);
-    float temp;
-    while(buf < buf_end){
-        temp = *buf;
-        features[n_idx++] = temp;
-        buf++;
-    }
-    close(fd);
-    return;
-}
-
-void mmap_labels_read(std::string &labels_file, std::vector<int32_t>& labels){
-    int64_t n_idx = 0;
-    int32_t fd = open(labels_file.c_str(), O_RDONLY);
-    if(fd == -1){
-        std::cout<<"cannout open file: "<<labels_file<<"\n";
-    }
-    int64_t buf_len = lseek(fd, 0, SEEK_END);
-    const int32_t *buf = (int32_t *)mmap(NULL, buf_len, PROT_READ, MAP_PRIVATE, fd, 0);
-    const int32_t* buf_end = buf + buf_len/sizeof(int32_t);
-    int32_t temp;
-    while(buf < buf_end){
-        temp = *buf;
-        labels[n_idx++] = temp;
-        buf++;
-    }
-    close(fd);
-    return;
-}
-
-void GPUGraphStore::EnableP2PAccess(){
+void StorageManagement::EnableP2PAccess(){
     int32_t central_device = -1;
     cudaGetDevice(&central_device);
 
@@ -167,7 +27,7 @@ void GPUGraphStore::EnableP2PAccess(){
     central_device_ = central_device;
 }
 
-void GPUGraphStore::ConfigPartition(BuildInfo* info, int32_t shard_count){
+void StorageManagement::ConfigPartition(BuildInfo* info, int32_t shard_count){
 
     shard_to_device_.resize(shard_count);
     for(int32_t i = 0; i < shard_count; i++){
@@ -187,7 +47,7 @@ void GPUGraphStore::ConfigPartition(BuildInfo* info, int32_t shard_count){
     info->partition_count = shard_count;
 }
 
-void GPUGraphStore::ReadMetaFIle(BuildInfo* info){
+void StorageManagement::ReadMetaFIle(BuildInfo* info){
     std::istringstream iss;
     std::string buff;
     std::ifstream Metafile("./meta_config");
@@ -251,7 +111,7 @@ void GPUGraphStore::ReadMetaFIle(BuildInfo* info){
 
 }
 
-void GPUGraphStore::Load_Graph(BuildInfo* info){
+void StorageManagement::LoadGraph(BuildInfo* info){
     std::cout<<"Start load graph\n";
 
     // int32_t partition_count = info->partition_count;
@@ -271,7 +131,7 @@ void GPUGraphStore::Load_Graph(BuildInfo* info){
 }
 
 
-void GPUGraphStore::Load_Feature(BuildInfo* info){
+void StorageManagement::LoadFeature(BuildInfo* info){
     std::cout<<"start load node\n";
 
     int32_t partition_count = info->partition_count;
@@ -291,12 +151,8 @@ void GPUGraphStore::Load_Feature(BuildInfo* info){
     std::string training_path = dataset_path_  + "trainingset";
     std::string validation_path = dataset_path_  + "validationset";
     std::string testing_path = dataset_path_  + "testingset";
-    // std::string training_path = dataset_path_  + "train_ids";
-    // std::string validation_path = dataset_path_  + "valid_ids";
-    // std::string testing_path = dataset_path_  + "test_ids";
     std::string features_path = dataset_path_ + "features";
     std::string labels_path = dataset_path_ + "labels";
-    // std::string labels_path = dataset_path_ + "labels_raw";
 
     std::string partition_path = dataset_path_ + "partition_" + std::to_string(partition_count) + "_bn";
 
@@ -391,7 +247,6 @@ void GPUGraphStore::Load_Feature(BuildInfo* info){
             int32_t ts_label = all_labels[info->training_set_ids[part_id][i]];
             info->training_labels[part_id].push_back(ts_label);
         }
-        // info->training_labels[part_id].resize(info->training_set_ids[part_id].size());
         info->training_set_num.push_back(info->training_set_ids[part_id].size());
     }
     std::cout<<info->training_set_num[0]<<" "<<info->training_set_ids[0].size()<<"\n";
@@ -400,7 +255,6 @@ void GPUGraphStore::Load_Feature(BuildInfo* info){
             int32_t ts_label = all_labels[info->validation_set_ids[part_id][i]];
             info->validation_labels[part_id].push_back(ts_label);
         }
-        // info->validation_labels[part_id].resize(info->validation_set_ids[part_id].size());
         info->validation_set_num.push_back(info->validation_set_ids[part_id].size());
     }
 
@@ -409,7 +263,6 @@ void GPUGraphStore::Load_Feature(BuildInfo* info){
             int32_t ts_label = all_labels[info->testing_set_ids[part_id][i]];
             info->testing_labels[part_id].push_back(ts_label);
         }
-        // info->testing_labels.resize(info->testing_set_ids[part_id].size());
         info->testing_set_num.push_back(info->testing_set_ids[part_id].size());
     }
 
@@ -419,14 +272,9 @@ void GPUGraphStore::Load_Feature(BuildInfo* info){
     info->int_attr_len = 0;
     info->total_num_nodes = node_num_;
     std::cout<<"Finish Partition\n";
-
-    // training_ids.clear();
-    // validation_ids.clear();
-    // testing_ids.clear();
-    // all_labels.clear();
 }
 
-void GPUGraphStore::Initialze(int32_t shard_count){
+void StorageManagement::Initialze(int32_t shard_count){
 
     BuildInfo* info = new BuildInfo();
 
@@ -436,22 +284,22 @@ void GPUGraphStore::Initialze(int32_t shard_count){
 
     ReadMetaFIle(info);
 
-    Load_Graph(info);
+    LoadGraph(info);
 
-    Load_Feature(info);
+    LoadFeature(info);
 
     env_ = NewIPCEnv(shard_count);
     env_ -> Coordinate(info);
 
-    node_ = NewGPUMemoryNodeStorage();
-    node_ -> Build(info);  
+    feature_ = NewGPUMemoryNodeStorage();
+    feature_ -> Build(info);  
 
     graph_ = NewGPUMemoryGraphStorage();
     graph_ -> Build(info);
 
     cudaCheckError();
 
-    cache_ = new GPUCache();
+    cache_ = new UnifiedCache();
     std::vector<int> device;
 
     for(int32_t i = 0; i < shard_to_device_.size(); i++){
@@ -468,30 +316,30 @@ void GPUGraphStore::Initialze(int32_t shard_count){
     std::cout<<"Storage Initialized\n";
 }
 
-GPUGraphStorage* GPUGraphStore::GetGraph(){
+GraphStorage* StorageManagement::GetGraph(){
     return graph_;
 }
 
-GPUNodeStorage* GPUGraphStore::GetNode(){
-    return node_;
+FeatureStorage* StorageManagement::GetFeature(){
+    return feature_;
 }
 
-GPUCache* GPUGraphStore::GetCache(){
+UnifiedCache* StorageManagement::GetCache(){
     return cache_;
 }
 
-IPCEnv* GPUGraphStore::GetIPCEnv(){
+IPCEnv* StorageManagement::GetIPCEnv(){
     return env_;
 }
 
-int32_t GPUGraphStore::Shard_To_Device(int32_t shard_id){
+int32_t StorageManagement::Shard_To_Device(int32_t shard_id){
     return shard_to_device_[shard_id];
 }
 
-int32_t GPUGraphStore::Shard_To_Partition(int32_t shard_id){
+int32_t StorageManagement::Shard_To_Partition(int32_t shard_id){
     return shard_to_partition_[shard_id];
 }
 
-int32_t GPUGraphStore::Central_Device(){
+int32_t StorageManagement::Central_Device(){
     return central_device_;
 }

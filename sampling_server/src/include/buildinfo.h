@@ -1,7 +1,8 @@
-#ifndef GRPAHLEARN_CORE_GRAPH_GPUSTORAGE_TYPES_H
-#define GRPAHLEARN_CORE_GRAPH_GPUSTORAGE_TYPES_H
+#ifndef BUILD_INFO_H
+#define BUILD_INFO_H
 #include <cstdint>
 #include <vector>
+
 struct BuildInfo{
     //device                                                                                                                        ``
     std::vector<int32_t> shard_to_partition;

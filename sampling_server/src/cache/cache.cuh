@@ -1,11 +1,11 @@
-#ifndef GPU_CACHE_H
-#define GPU_CACHE_H
+#ifndef CACHE_H
+#define CACHE_H
+
+#include "graph_storage.cuh"
+#include "feature_storage.cuh"
 
 #include <iostream>
 #include <vector>
-#include "GPU_Node_Storage.cuh"
-#include "GPU_Graph_Storage.cuh"
-
 
 class CacheController{
 public:
@@ -25,12 +25,12 @@ public:
         void* stream) = 0;
 
     virtual void FindTopo(int32_t* input_ids, 
-                    char* partition_index, 
-                    int32_t* partition_offset, 
-                    int32_t batch_size, 
-                    int32_t op_id, 
-                    void* strm_hdl, 
-                    int32_t device_id) = 0;
+                        char* partition_index, 
+                        int32_t* partition_offset, 
+                        int32_t batch_size, 
+                        int32_t op_id, 
+                        void* strm_hdl, 
+                        int32_t device_id) = 0;
 
     virtual void CacheProfiling(
         int32_t* sampled_ids,
@@ -61,7 +61,7 @@ public:
 
 CacheController* NewPreSCCacheController(int32_t train_step, int32_t device_count);
 
-class GPUCache{
+class UnifiedCache{
 public:
     void Initialize(
         int64_t cache_memory,
@@ -128,6 +128,8 @@ public:
     int32_t MaxIdNum(int32_t dev_id);
 
     unsigned long long int* GetEdgeAccessedMap(int32_t dev_id);
+    
+    void FeatCacheLookup();
 
 private:    
     std::vector<bool> dev_ids_;/*valid device, indexed by device id, False means invalid, True means valid*/

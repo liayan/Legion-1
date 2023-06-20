@@ -1,68 +1,29 @@
-#include "Kernels.cuh"
+#include "operator_impl.cuh"
 #include "device_launch_parameters.h"
+
 #include <cuda_runtime.h>
 #include <iostream>
+#include <random>
+
 #include <thrust/random/uniform_int_distribution.h>
 #include <thrust/random/linear_congruential_engine.h>
-#include "GPUCache.cuh"
-#include <random>
 
 #define TRAINMODE 0
 #define VALIDMODE 1
 #define TESTMODE  2
 
-extern "C"
-void* d_alloc_space(int64_t num_bytes) {
-    void *ret;
-	cudaMalloc(&ret, num_bytes);
-	cudaCheckError();
-    return ret;
-}
+#define OP_THREAD_NUM 1024
 
-extern "C"
-void* d_alloc_space_managed(unsigned int num_bytes) {
-    void *ret;
-	cudaMallocManaged(&ret, num_bytes);
-	cudaCheckError();
-    return ret;
-}
-
-extern "C"
-void d_copy_2_h(void* h_ptr, void* d_ptr, unsigned int num_bytes){
-	cudaMemcpy(h_ptr, d_ptr, num_bytes, cudaMemcpyDeviceToHost);
-	cudaCheckError();
-}
-
-
-extern "C"
-void SetGPUDevice(int32_t shard_id){
-	cudaSetDevice(shard_id);
-	cudaCheckError();
-}
-
-extern "C"
-int32_t GetGPUDevice(){
-	int32_t dev_id;
-	cudaGetDevice(&dev_id);
-	return dev_id;
-}
-
-extern "C"
-void d_free_space(void* d_ptr){
-	cudaFree(d_ptr);
-}
-
-
-extern "C"
-void* host_alloc_space(unsigned int num_bytes) {
-    void* host_ptr;
-	void* ret;
-	cudaHostAlloc(&host_ptr, num_bytes, cudaHostAllocMapped);
-	cudaHostGetDevicePointer(&ret, host_ptr, 0);
-	cudaCheckError();
-    return ret;
-}
-
+// Macro for checking cuda errors following a cuda launch or api call
+#define cudaCheckError()                                       \
+  {                                                            \
+    cudaError_t e = cudaGetLastError();                        \
+    if (e != cudaSuccess) {                                    \
+      printf("Cuda failure %s:%d: '%s'\n", __FILE__, __LINE__, \
+             cudaGetErrorString(e));                           \
+      exit(EXIT_FAILURE);                                      \
+    }                                                          \
+  }
 
 //assume no duplicate
 __global__ void batch_generator(
@@ -160,48 +121,48 @@ __global__ void Init_Array_Int32(
 }
 
 extern "C"
-void batch_generator_kernel(
-	cudaStream_t strm_hdl, 
-	GPUNodeStorage* noder,
-	GPUCache* cache,
-	GPUMemoryPool* memorypool,
-	int32_t batch_size, 
-	int32_t counter, 
-	int32_t part_id,
-	int32_t dev_id,
-	int32_t mode)
+void BatchGenerate(
+	cudaStream_t    strm_hdl, 
+	FeatureStorage* feature,
+	UnifiedCache*   cache,
+	MemoryPool*     memorypool,
+	int32_t         batch_size, 
+	int32_t         counter, 
+	int32_t         part_id,
+	int32_t         dev_id,
+	int32_t         mode)
 {
 	int32_t* all_ids = nullptr;
 	int32_t* all_labels = nullptr;
 	int32_t total_cap = 0;
 	if(mode == TRAINMODE){
-		all_ids = noder->GetTrainingSetIds(dev_id);
-		all_labels = noder->GetTrainingLabels(dev_id);
-		total_cap = noder->TrainingSetSize(dev_id);
+		all_ids 	= feature->GetTrainingSetIds(dev_id);
+		all_labels 	= feature->GetTrainingLabels(dev_id);
+		total_cap 	= feature->TrainingSetSize(dev_id);
 	}else if(mode == VALIDMODE){
-		all_ids = noder->GetValidationSetIds(dev_id);
-		all_labels = noder->GetValidationLabels(dev_id);
-		total_cap = noder->ValidationSetSize(dev_id);
+		all_ids 	= feature->GetValidationSetIds(dev_id);
+		all_labels 	= feature->GetValidationLabels(dev_id);
+		total_cap 	= feature->ValidationSetSize(dev_id);
 	}else if(mode == TESTMODE){
-		all_ids = noder->GetTestingSetIds(dev_id);
-		all_labels = noder->GetTestingLabels(dev_id);
-		total_cap = noder->TestingSetSize(dev_id);
+		all_ids 	= feature->GetTestingSetIds(dev_id);
+		all_labels 	= feature->GetTestingLabels(dev_id);
+		total_cap 	= feature->TestingSetSize(dev_id);
 	}else{
 		std::cout<<"invalid mode: "<<mode<<"\n";
 	}
 
-	int32_t total_node_num = noder->TotalNodeNum();
+	int32_t total_node_num 	= feature->TotalNodeNum();
 
-	int32_t* batch_ids = memorypool->GetSampledIds();
-	int32_t* labels = memorypool->GetLabels();
-	uint32_t* accessed_map = memorypool->GetAccessedMap();
-	int32_t* position_map = memorypool->GetPositionMap();
-	int32_t* node_counter = memorypool->GetNodeCounter();
-	int32_t* edge_counter = memorypool->GetEdgeCounter();
-	int32_t* agg_src_ids = memorypool->GetAggSrcId();
-	int32_t* agg_dst_ids = memorypool->GetAggDstId();
-	int32_t* agg_src_off = memorypool->GetAggSrcOf();
-	int32_t* agg_dst_off = memorypool->GetAggDstOf();
+	int32_t* batch_ids 		= memorypool->GetSampledIds();
+	int32_t* labels 		= memorypool->GetLabels();
+	uint32_t* accessed_map 	= memorypool->GetAccessedMap();
+	int32_t* position_map 	= memorypool->GetPositionMap();
+	int32_t* node_counter 	= memorypool->GetNodeCounter();
+	int32_t* edge_counter 	= memorypool->GetEdgeCounter();
+	int32_t* agg_src_ids 	= memorypool->GetAggSrcId();
+	int32_t* agg_dst_ids 	= memorypool->GetAggDstId();
+	int32_t* agg_src_off 	= memorypool->GetAggSrcOf();
+	int32_t* agg_dst_off 	= memorypool->GetAggDstOf();
 
 	if(all_ids == nullptr){
 		std::cout<<"invalid src id ptr\n";
@@ -222,8 +183,8 @@ void batch_generator_kernel(
 	cudaCheckError();
 
 	int32_t size = ((batch_size*(counter+1)) >= total_cap) ? (total_cap - batch_size * counter) : batch_size;
-	dim3 bg_block((size - 1)/1024 + 1, 1);
-	dim3 bg_thread(1024, 1);
+	dim3 bg_block((size - 1)/OP_THREAD_NUM + 1, 1);
+	dim3 bg_thread(OP_THREAD_NUM, 1);
 	batch_generator<<<bg_block, bg_thread, 0, (strm_hdl)>>>(batch_ids, labels, size, counter, all_ids, all_labels, total_cap, position_map, accessed_map);
 	cudaCheckError();
 
@@ -564,15 +525,16 @@ __global__ void kernel_pre_sampler_optimized(
 }
 
 
-extern "C" 
-void GPU_Random_Sampling(
-	cudaStream_t strm_hdl, 
-	GPUGraphStorage* graph,
-	GPUCache* cache,
-	GPUMemoryPool* memorypool,
-	int32_t count,
-	int32_t op_id,
-	bool is_presc) 
+extern "C"											
+void RandomSample(
+  cudaStream_t    strm_hdl, 
+  GraphStorage*   graph,
+  UnifiedCache*   cache,
+  MemoryPool*     memorypool,
+  int32_t         count,
+  int32_t         dev_id,
+  int32_t         op_id,
+  bool            is_presc) 
 {		
 	int32_t dev_id;
 	cudaGetDevice(&dev_id);
@@ -581,23 +543,23 @@ void GPU_Random_Sampling(
 		return;
 	}
 
-	int32_t** csr_dst_node_ids = graph -> GetCSRNodeMatrix(dev_id);
-	int64_t** csr_node_index  = graph -> GetCSRNodeIndex(dev_id);
-	int32_t partition_count = graph -> GetPartitionCount();
-	char* partition_index = graph -> PartitionIndex(dev_id);
-	int32_t* parition_offset = graph -> PartitionOffset(dev_id);
+	int32_t** csr_dst_node_ids 		= graph -> GetCSRNodeMatrix(dev_id);
+	int64_t** csr_node_index  		= graph -> GetCSRNodeIndex(dev_id);
+	int32_t partition_count 		= graph -> GetPartitionCount();
+	char* partition_index 			= graph -> PartitionIndex(dev_id);
+	int32_t* parition_offset 		= graph -> PartitionOffset(dev_id);
 
-	uint32_t* accessed_map = memorypool->GetAccessedMap();
-	int32_t* position_map = memorypool->GetPositionMap();
-	int32_t* node_counter = memorypool->GetNodeCounter();
-	int32_t* edge_counter = memorypool->GetEdgeCounter();
-	int32_t* sampled_ids = memorypool->GetSampledIds();
-	int32_t* agg_src_ids = memorypool->GetAggSrcId();
-	int32_t* agg_dst_ids = memorypool->GetAggDstId();
-	int32_t* agg_src_off = memorypool->GetAggSrcOf();
-	int32_t* agg_dst_off = memorypool->GetAggDstOf();
-	char* tmp_partition_index  = memorypool->GetTmpPartIdx();
-	int32_t* tmp_parition_offset  = memorypool->GetTmpPartOff();
+	uint32_t* accessed_map 			= memorypool->GetAccessedMap();
+	int32_t* position_map 			= memorypool->GetPositionMap();
+	int32_t* node_counter 			= memorypool->GetNodeCounter();
+	int32_t* edge_counter 			= memorypool->GetEdgeCounter();
+	int32_t* sampled_ids 			= memorypool->GetSampledIds();
+	int32_t* agg_src_ids 			= memorypool->GetAggSrcId();
+	int32_t* agg_dst_ids 			= memorypool->GetAggDstId();
+	int32_t* agg_src_off 			= memorypool->GetAggSrcOf();
+	int32_t* agg_dst_off 			= memorypool->GetAggDstOf();
+	char* tmp_partition_index  		= memorypool->GetTmpPartIdx();
+	int32_t* tmp_parition_offset	= memorypool->GetTmpPartOff();
 
     dim3 block_num(48, 1);
     dim3 thread_num(1024, 1);
@@ -659,72 +621,30 @@ void GPU_Random_Sampling(
 }
 
 
-__global__ void zero_copy_with_aggregated_cache(
-	float* cpu_float_attrs, float** cache_float_attrs, int32_t float_attr_len,
-	int32_t* sampled_ids, int32_t* cache_index, int32_t cache_capacity,
-	int32_t* node_counter, float* dst_float_buffer,
-	int32_t total_num_nodes,
-	int32_t dev_id,
-	int32_t op_id)
-{
-	int32_t batch_size = 0;
-	int32_t node_off = 0;
-	if(op_id == 1){
-		node_off = node_counter[3];
-		batch_size = node_counter[4];
-	}else if(op_id == 3){
-		node_off = node_counter[5];
-		batch_size = node_counter[6];
-	}else if(op_id == 5){
-		node_off = node_counter[7];
-		batch_size = node_counter[8];
-	}
-	int32_t gidx;//global cache index
-	int32_t fidx;//local cache index
-	int32_t didx;//device index
-	int32_t foffset;
-	if(float_attr_len > 0){
-		for(int64_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < (int64_t(batch_size) * float_attr_len); thread_idx += blockDim.x * gridDim.x){
-			gidx = (cache_index[thread_idx / float_attr_len]);
-			didx = gidx / cache_capacity;//device idx in clique
-			fidx = gidx % cache_capacity;
-			foffset = thread_idx % float_attr_len;
-			if(gidx < 0){/*cache miss*/
-				fidx = sampled_ids[node_off + (thread_idx / float_attr_len)];
-				if(fidx >= 0){
-					dst_float_buffer[int64_t(int64_t((int64_t(node_off) * float_attr_len)) + thread_idx)] = cpu_float_attrs[int64_t(int64_t(int64_t(fidx%total_num_nodes) * float_attr_len) + foffset)];
-				}
-			}else{/*cache hit, find global position*/
-				dst_float_buffer[int64_t(int64_t((int64_t(node_off) * float_attr_len)) + thread_idx)] = cache_float_attrs[didx][int64_t(int64_t(int64_t(fidx) * float_attr_len) + foffset)];
-			}
-		}
-	}
-}
 
 
-
-// extern "C"
-void get_feature_kernel(
-	cudaStream_t strm_hdl, 
-	GPUCache* cache, 
-	GPUNodeStorage* noder,
-	GPUMemoryPool* memorypool,
-	int32_t dev_id,
-	int32_t op_id,
-	bool in_memory)
+extern "C"
+void FeatureCacheLookup(
+  cudaStream_t    strm_hdl,
+  UnifiedCache*   cache, 
+  FeatureStorage* feature,
+  MemoryPool*     memorypool,
+  int32_t         dev_id,
+  int32_t         op_id,
+  bool            in_memory)
 {	
-	int32_t float_attr_len = noder->GetFloatAttrLen();
-	int32_t total_num_nodes = noder->TotalNodeNum();
+	int32_t float_attr_len 		= feature->GetFloatAttrLen();
+	int32_t total_num_nodes 	= feature->TotalNodeNum();
 
 	if(float_attr_len < 0){
 		std::cout<<"error feature len\n";
 	}
 
-	int32_t cache_capacity = cache->NodeCapacity(dev_id); 
-	int32_t* cache_index = memorypool->GetCacheSearchBuffer();
-	int32_t* sampled_ids = memorypool->GetSampledIds();
-	int32_t* node_counter = memorypool->GetNodeCounter();
-	float* dst_float_buffer = memorypool->GetFloatFeatures();
+	int32_t cache_capacity 		= cache->NodeCapacity(dev_id); 
+	int32_t* cache_index 		= memorypool->GetCacheSearchBuffer();
+	int32_t* sampled_ids 		= memorypool->GetSampledIds();
+	int32_t* node_counter 		= memorypool->GetNodeCounter();
+	float* dst_float_buffer 	= memorypool->GetFloatFeatures();
 
 	cache->FindFeat(sampled_ids, cache_index, node_counter, op_id, strm_hdl, dev_id);
 	cudaCheckError();
@@ -735,7 +655,7 @@ void get_feature_kernel(
 	dim3 block_num(58, 1);
 	dim3 thread_num(1024, 1);
 	if(in_memory){
-		float* cpu_float_attrs = noder->GetAllFloatAttr();
+		float* cpu_float_attrs = feature->GetAllFloatAttr();
 		zero_copy_with_aggregated_cache<<<block_num, thread_num, 0, (strm_hdl)>>>(
 			cpu_float_attrs, cache_float_attrs, float_attr_len,
 			sampled_ids, cache_index, cache_capacity,
@@ -756,13 +676,13 @@ __global__ void ClearPosMap(int32_t* position_map, int32_t* sampled_ids, int32_t
 }
 
 extern "C"
-void make_update_plan(
-	cudaStream_t strm_hdl, 
-	GPUGraphStorage* graph, 
-	GPUCache* cache,
-	GPUMemoryPool* memorypool,
-	int32_t dev_id,
-	int32_t mode)
+void IOSubmit(
+	cudaStream_t    strm_hdl, 
+	GraphStorage*   graph, 
+	UnifiedCache*   cache,
+  	MemoryPool*     memorypool,
+	int32_t         dev_id,
+  	int32_t         mode)
 {
 	if(mode == TRAINMODE){
 		int32_t* agg_dst_id = memorypool->GetAggDstId();
@@ -782,24 +702,16 @@ void make_update_plan(
 	}
 }
 
-/*every shard has different piece of candidates*/
 extern "C"
-void update_cache(
-	cudaStream_t strm_hdl, 
-	GPUCache* cache, 
-	GPUNodeStorage* noder,
-	GPUMemoryPool* memorypool,
-	int32_t dev_id,
-	int32_t mode)
+void IOComplete(
+  cudaStream_t    strm_hdl, 
+  UnifiedCache*   cache, 
+  FeatureStorage* feature,
+  MemoryPool*     memorypool,
+  int32_t         dev_id,
+  int32_t         mode)
 {
 	if(mode == TRAINMODE){
-		// int32_t float_attr_len = noder->GetFloatAttrLen();
-		// float* cache_float_feature = nullptr;
-		// int32_t* candidates_ids = memorypool->GetSampledIds();
-		// float* candidates_float_feature = memorypool->GetFloatFeatures();
-		// if(float_attr_len > 0){
-		// 	cache_float_feature = cache -> Float_Feature_Cache(dev_id);
-		// }
-		// cache->Update(candidates_ids, candidates_float_feature, cache_float_feature, float_attr_len, strm_hdl, dev_id);
+
 	}
 }

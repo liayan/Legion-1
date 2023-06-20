@@ -1,239 +1,9 @@
-#include "GPUCache.cuh"
-
-
-
-#include <iostream>
-#include <fstream>
-#include <string>
-#include <sstream>
-#include <vector>
-#include <mutex>
-#include <thrust/random/uniform_int_distribution.h>
-#include <thrust/random/linear_congruential_engine.h>
-#include <thrust/sort.h>
-#include <thrust/execution_policy.h>
-#include <algorithm>
-#include <functional>
-#include <cstdlib>
-
-#include <cstdint>
-#include <sys/mman.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <time.h>
-#include <sys/types.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <sys/time.h>
-#include <time.h>
-// #define TOTAL_DEV_NUM 1
-#define MIN_INTERVAL 0.01
-#define CLS 64
-
-
-
-__global__ void GetEdgeMem(int32_t* edge_order, uint64_t* edge_mem, int32_t total_num_nodes, int64_t* csr_index){
-    for(int32_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < total_num_nodes; thread_idx += gridDim.x * blockDim.x){
-        int32_t id = edge_order[thread_idx];
-        int64_t neighbor_count = csr_index[id + 1]- csr_index[id];
-        edge_mem[thread_idx] = (sizeof(int64_t) + sizeof(int32_t) * neighbor_count);
-    }
-}
-
-
-__global__ void aggregate_access(unsigned long long int* agg_access_time, unsigned long long int* new_access_time, int32_t total_num_nodes){
-    for(int32_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < (total_num_nodes); thread_idx += blockDim.x * gridDim.x){
-        agg_access_time[thread_idx] += new_access_time[thread_idx];
-    }
-}
-
-__global__ void init_cache_order(int32_t* cache_order, int32_t total_num_nodes){
-    for(int32_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < (total_num_nodes); thread_idx += blockDim.x * gridDim.x){
-        cache_order[thread_idx] = thread_idx;
-    }
-}
-
-__global__ void init_feature_cache(float** pptr, float* ptr, int dev_id){
-    pptr[dev_id] = ptr;
-}
-
-#include <thrust/device_vector.h>
-#include <thrust/host_vector.h>
-#include <thrust/sequence.h>
-#include <bcht.hpp>
-#include <cmd.hpp>
-#include <gpu_timer.hpp>
-#include <limits>
-#include <perf_report.hpp>
-#include <rkg.hpp>
-#include <type_traits>
-
-// Macro for checking cuda errors following a cuda launch or api call
-#define cudaCheckError()                                       \
-  {                                                            \
-    cudaError_t e = cudaGetLastError();                        \
-    if (e != cudaSuccess) {                                    \
-      printf("Cuda failure %s:%d: '%s'\n", __FILE__, __LINE__, \
-             cudaGetErrorString(e));                           \
-      exit(EXIT_FAILURE);                                      \
-    }                                                          \
-  }
-
-
+#include "cache.cuh"
+#include "cache_impl.cuh"
 
 using pair_type = bght::pair<int32_t, int32_t>;
 using index_pair_type = bght::pair<int32_t, char>;
 using offset_pair_type = bght::pair<int32_t, int32_t>;
-
-__global__ void InitIndexPair(index_pair_type* pair, int32_t* QT, int32_t capacity, int32_t cache_expand, int32_t Kg, int32_t Ki){
-    for(int32_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < capacity * cache_expand; thread_idx += gridDim.x * blockDim.x){
-        pair[thread_idx].first = QT[thread_idx];
-        pair[thread_idx].second = thread_idx % Kg + Ki * Kg;
-    }
-}
-
-__global__ void InitOffsetPair(offset_pair_type* pair, int32_t* QT, int32_t capacity, int32_t cache_expand, int32_t Kg){
-    for(int32_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < capacity * cache_expand; thread_idx += gridDim.x * blockDim.x){
-        pair[thread_idx].first = QT[thread_idx];
-        pair[thread_idx].second = thread_idx / Kg;
-    }
-}
-
-//interleave cache
-__global__ void InitPair(pair_type* pair, int32_t* QF, int32_t capacity, int32_t cache_expand, int32_t Kg){
-    for(int32_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < capacity * cache_expand; thread_idx += gridDim.x * blockDim.x){
-        pair[thread_idx].first = QF[thread_idx];
-        pair[thread_idx].second = (thread_idx % Kg) * capacity + thread_idx / Kg;
-    }
-}
-
-
-__global__ void topo_cache_hit(char* partition_index, int32_t batch_size, int32_t* global_count){
-    __shared__ int32_t local_count[1];
-    if(threadIdx.x == 0){
-        local_count[0] = 0;
-    }
-    __syncthreads();
-    for(int32_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < (batch_size); thread_idx += blockDim.x * gridDim.x){
-        int32_t offset = partition_index[thread_idx];
-        if(offset >= 0){
-            atomicAdd(local_count, 1);
-        }
-    }
-    __syncthreads();
-    if(threadIdx.x == 0){
-        atomicAdd(global_count, local_count[0]);
-    }
-}
-
-
-__global__ void feature_cache_hit(int32_t* cache_offset, int32_t batch_size, int32_t* global_count){
-    __shared__ int32_t local_count[1];
-    if(threadIdx.x == 0){
-        local_count[0] = 0;
-    }
-    __syncthreads();
-    for(int32_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < (batch_size); thread_idx += blockDim.x * gridDim.x){
-        int32_t offset = cache_offset[thread_idx];
-        if(offset >= 0){
-            atomicAdd(local_count, 1);
-        }
-    }
-    __syncthreads();
-    if(threadIdx.x == 0){
-        atomicAdd(global_count, local_count[0]);
-    }
-}
-
-
-__global__ void Find_Kernel(
-    int32_t* sampled_ids,
-    int32_t* cache_offset,
-    int32_t* node_counter,
-    int32_t total_num_nodes,
-    int32_t op_id,
-    int32_t* cache_map)
-{
-    int32_t batch_size = 0;
-	int32_t node_off = 0;
-	if(op_id == 1){
-		node_off = node_counter[3];
-		batch_size = node_counter[4];
-	}else if(op_id == 3){
-		node_off = node_counter[5];
-		batch_size = node_counter[6];
-	}else if(op_id == 5){
-		node_off = node_counter[7];
-		batch_size = node_counter[8];
-	}
-    for(int32_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < batch_size; thread_idx += gridDim.x * blockDim.x){
-        int32_t id = sampled_ids[node_off + thread_idx];
-        // cache_offset[thread_idx] = -1;
-        if(id < 0){
-            cache_offset[thread_idx] = -1;
-        }else{
-            cache_offset[thread_idx] = cache_map[id%total_num_nodes];
-        }
-    }
-}
-
-__global__ void CacheHitTimes(int32_t* sampled_node, int32_t* node_counter){
-    __shared__ int32_t count[2];
-    if(threadIdx.x == 0){
-        count[0] = 0;
-        count[1] = 0;
-    }
-    __syncthreads();
-    int32_t num_nodes = node_counter[9];
-    for(int32_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < num_nodes; thread_idx += gridDim.x * blockDim.x){
-        int32_t cid = sampled_node[thread_idx];
-        if(cid >= 0){
-            atomicAdd(count, 1);
-        }
-    }
-    __syncthreads();
-    if(threadIdx.x == 0){
-        atomicAdd(node_counter + 10, count[0]);
-    }
-}
-
-__global__ void FeatFillUp(int32_t capacity, int32_t float_attr_len, float* feature_cache, float* cpu_float_attrs, int32_t* QF, int32_t Kg, int32_t Ki){
-    for(int64_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < int64_t(capacity) * float_attr_len; thread_idx += gridDim.x * blockDim.x){
-        int32_t id = QF[(thread_idx / float_attr_len) * Kg + Ki];
-        feature_cache[thread_idx] = cpu_float_attrs[int64_t(id) * float_attr_len + thread_idx % float_attr_len];
-    }
-}
-
-void mmap_cache_read(std::string &cache_file, std::vector<int32_t>& cache_map){
-    int64_t t_idx = 0;
-    int32_t fd = open(cache_file.c_str(), O_RDONLY);
-    if(fd == -1){
-        std::cout<<"cannout open file: "<<cache_file<<std::endl;
-    }
-    // int64_t buf_len = lseek(fd, 0, SEEK_END);
-    int64_t buf_len = int64_t(int64_t(cache_map.size()) * 4);
-    const int32_t* buf = (int32_t *)mmap(NULL, buf_len, PROT_READ, MAP_PRIVATE, fd, 0);
-    const int32_t* buf_end = buf + buf_len/sizeof(int32_t);
-    int32_t temp;
-    while(buf < buf_end){
-        temp = *buf;
-        cache_map[t_idx++] = temp;
-        buf++;
-    }
-    close(fd);
-    return;
-}
-
-__global__ void HotnessMeasure(int32_t* new_batch_ids, int32_t* node_counter, unsigned long long int* access_map){
-    int32_t num_candidates = node_counter[9];
-    for(int32_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < num_candidates; thread_idx += gridDim.x * blockDim.x){
-        int32_t cid = new_batch_ids[thread_idx];
-        if(cid >= 0){
-            atomicAdd(access_map + cid, 1);
-        }
-    }
-}
-
 
 
 class PreSCCacheController : public CacheController {
@@ -505,7 +275,8 @@ CacheController* NewPreSCCacheController(int32_t train_step, int32_t device_coun
 }
 
 
-void GPUCache::Initialize(
+
+void UnifiedCache::Initialize(
     int64_t cache_memory,
     int32_t int_attr_len,
     int32_t float_attr_len,
@@ -534,23 +305,23 @@ void GPUCache::Initialize(
     is_presc_ = true;
 }
 
-void GPUCache::InitializeCacheController(
+void UnifiedCache::InitializeCacheController(
     int32_t dev_id,
     int32_t total_num_nodes)
 {
     cache_controller_[dev_id]->Initialize(dev_id, total_num_nodes);
 }
 
-void GPUCache::Finalize(int32_t dev_id){
+void UnifiedCache::Finalize(int32_t dev_id){
     cudaSetDevice(dev_id);
     cache_controller_[dev_id]->Finalize();
 }
 
-int32_t GPUCache::NodeCapacity(int32_t dev_id){
+int32_t UnifiedCache::NodeCapacity(int32_t dev_id){
     return node_capacity_[dev_id / Kg_];
 }
 
-void GPUCache::FindFeat(
+void UnifiedCache::FindFeat(
     int32_t* sampled_ids,
     int32_t* cache_offset,
     int32_t* node_counter,
@@ -562,7 +333,7 @@ void GPUCache::FindFeat(
 }
 
 
-void GPUCache::FindTopo(
+void UnifiedCache::FindTopo(
     int32_t* input_ids,
     char* partition_index,
     int32_t* partition_offset, 
@@ -575,7 +346,7 @@ void GPUCache::FindTopo(
 }
 
 
-void GPUCache::CandidateSelection(int cache_agg_mode, GPUNodeStorage* noder, GPUGraphStorage* graph){
+void UnifiedCache::CandidateSelection(int cache_agg_mode, GPUNodeStorage* noder, GPUGraphStorage* graph){
     std::cout<<"Start selecting cache candidates\n";
     std::vector<unsigned long long int*> node_access_time;
     std::vector<unsigned long long int*> edge_access_time;
@@ -658,7 +429,7 @@ void GPUCache::CandidateSelection(int cache_agg_mode, GPUNodeStorage* noder, GPU
     is_presc_ = false;
 }
 
-void GPUCache::CostModel(int cache_agg_mode, GPUNodeStorage* noder, GPUGraphStorage* graph, std::vector<uint64_t>& counters, int32_t train_step){
+void UnifiedCache::CostModel(int cache_agg_mode, GPUNodeStorage* noder, GPUGraphStorage* graph, std::vector<uint64_t>& counters, int32_t train_step){
     dim3 block_num(80,1);
     dim3 thread_num(1024,1);
     int32_t total_num_nodes = noder->TotalNodeNum();
@@ -766,7 +537,7 @@ void GPUCache::CostModel(int cache_agg_mode, GPUNodeStorage* noder, GPUGraphStor
     }
 }
 
-void GPUCache::FillUp(int cache_agg_mode, GPUNodeStorage* noder, GPUGraphStorage* graph){
+void UnifiedCache::FillUp(int cache_agg_mode, GPUNodeStorage* noder, GPUGraphStorage* graph){
     for(int32_t i = 0; i < Kc_; i++){
         int cache_expand;
         if(cache_agg_mode == 0){
@@ -825,30 +596,30 @@ void GPUCache::FillUp(int cache_agg_mode, GPUNodeStorage* noder, GPUGraphStorage
     std::cout<<"Finish load topology cache\n";
 }
 
-float* GPUCache::Float_Feature_Cache(int32_t dev_id)
+float* UnifiedCache::Float_Feature_Cache(int32_t dev_id)
 {
     return float_feature_cache_[dev_id];
 }
 
-float** GPUCache::Global_Float_Feature_Cache(int32_t dev_id)
+float** UnifiedCache::Global_Float_Feature_Cache(int32_t dev_id)
 {
     return d_float_feature_cache_ptr_[dev_id];
 }
 
-int64_t* GPUCache::Int_Feature_Cache(int32_t dev_id)
+int64_t* UnifiedCache::Int_Feature_Cache(int32_t dev_id)
 {
     return int_feature_cache_[dev_id];
 }
 
-int32_t GPUCache::MaxIdNum(int32_t dev_id){
+int32_t UnifiedCache::MaxIdNum(int32_t dev_id){
     return cache_controller_[dev_id]->MaxIdNum();
 }
 
-unsigned long long int* GPUCache::GetEdgeAccessedMap(int32_t dev_id){
+unsigned long long int* UnifiedCache::GetEdgeAccessedMap(int32_t dev_id){
     return cache_controller_[dev_id]->GetEdgeAccessedMap();
 }
 
-void GPUCache::CacheProfiling(
+void UnifiedCache::CacheProfiling(
     int32_t* sampled_ids,
     int32_t* agg_src_id,
     int32_t* agg_dst_id,
@@ -862,11 +633,25 @@ void GPUCache::CacheProfiling(
     cache_controller_[dev_id]->CacheProfiling(sampled_ids, agg_src_id, agg_dst_id, agg_src_off, agg_dst_off, node_counter, edge_counter, is_presc_, stream);
 }
 
-void GPUCache::AccessCount(
+void UnifiedCache::AccessCount(
     int32_t* d_key,
     int32_t num_keys,
     void* stream,
     int32_t dev_id)
 {
     cache_controller_[dev_id]->AccessCount(d_key, num_keys, stream);
+}
+
+
+void UnifiedCache::FeatCacheLookup(){
+    dim3 block_num(58, 1);
+	dim3 thread_num(1024, 1);
+    float* cpu_float_attrs = noder->GetAllFloatAttr();
+    zero_copy_with_aggregated_cache<<<block_num, thread_num, 0, (strm_hdl)>>>(
+        cpu_float_attrs, cache_float_attrs, float_attr_len,
+        sampled_ids, cache_index, cache_capacity,
+        node_counter, dst_float_buffer,
+        total_num_nodes,
+        dev_id, op_id
+    );
 }

@@ -1,6 +1,5 @@
-#ifndef SERVER_H
-#define SERVER_H
-#include <vector>
+#ifndef MONITOR_H
+#define MONITOR_H
 
 #include <iostream>
 #ifdef _MSC_VER
@@ -133,35 +132,5 @@ std::vector<uint64_t> PCM_Monitor::GetCounter(){
     
     return platform_->GetCounter();
 }
-
-struct RunnerParams {
-    int device_id;
-    std::vector<int> fanout;
-    void* cache;
-    void* graph;
-    void* noder;
-    void* env;
-    int global_batch_id;
-    bool in_memory;
-};
-
-class Server {
-public:
-    virtual void Initialize(int global_shard_count) = 0;
-    virtual void PreSc(int cache_agg_mode) = 0;
-    virtual void Run() = 0;
-    virtual void Finalize() = 0;
-};
-Server* NewGPUServer();
-
-class Runner {
-public:
-    virtual void Initialize(RunnerParams* params) = 0;
-    virtual void InitializeFeaturesBuffer(RunnerParams* params) = 0;
-    virtual void RunPreSc(RunnerParams* params) = 0;
-    virtual void RunOnce(RunnerParams* params) = 0;
-    virtual void Finalize(RunnerParams* params) = 0;
-};
-Runner* NewGPURunner();
 
 #endif

@@ -8,7 +8,7 @@ struct OpParams {
     void* memorypool;
     void* cache;
     void* graph;
-    void* noder;
+    void* feature;
     void* env;
     int neighbor_count;
     bool is_presc;
@@ -20,10 +20,10 @@ public:
     virtual void run(OpParams* params) = 0;
 };
 
-Operator* NewBatchGenerator(int op_id);
+Operator* NewBatchGenerateOP(int op_id);
 Operator* NewRandomSampler(int op_id);
-Operator* NewFeatureExtractor(int op_id);
-Operator* NewCachePlanner(int op_id);
-Operator* NewCacheUpdater(int op_id);
+Operator* NewCacheLookupOP(int op_id);
+Operator* NewSSDIOSubmitOP(int op_id);
+Operator* NewSSDIOCompleteOP(int op_id);
 
 #endif
