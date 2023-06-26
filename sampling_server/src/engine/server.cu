@@ -7,7 +7,7 @@
 #include "operator_impl.cuh"
 #include "memorypool.cuh"
 #include "server.h"
-#include "monitor.h"
+// #include "monitor.h"
 
 #include <thread>
 #include <functional>
@@ -51,7 +51,7 @@ public:
         // monitor_ = new PCM_Monitor();
         // monitor_->Init();
         
-        StorageManagement* storagemanagement = new StorageManagement();
+        StorageManagement* storage_management = new StorageManagement();
         storage_management->Initialze(shard_count_);
         graph_              = storage_management->GetGraph();
         feature_            = storage_management->GetFeature();
@@ -85,7 +85,7 @@ public:
     }
 
     void PreSc(int cache_agg_mode) {
-        monitor_->Start();
+        // monitor_->Start();
         std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
 
         for(int i = 0; i < shard_count_; i++){
@@ -98,7 +98,7 @@ public:
             th.join();
         }
 
-        monitor_->Stop();
+        // monitor_->Stop();
         std::vector<uint64_t> counters(2, 0);// =  monitor_->GetCounter();
         double t = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now() - t1).count();
 
@@ -136,7 +136,7 @@ public:
         }
         graph_->Finalize();
         feature_->Finalize();
-        cache_->Finalize();
+        // cache_->Finalize();
         ipc_env_->Finalize();
         std::cout<<"Server Stopped\n";
     }
@@ -169,7 +169,7 @@ public:
         local_dev_id_           = params->device_id;
         UnifiedCache* cache     = (UnifiedCache*)(params->cache);
         GraphStorage* graph     = (GraphStorage*)(params->graph);
-        FeatureStorage* noder   = (FeatureStorage*)(params->noder);
+        FeatureStorage* feature   = (FeatureStorage*)(params->feature);
         IPCEnv* env             = (IPCEnv*)(params->env);
 
         /*initialize GPU environment*/
@@ -209,7 +209,7 @@ public:
         int interbatch_concurrency = INTERBATCH_CON;
         interbatch_concurrency_ = interbatch_concurrency;
 
-        int total_num_nodes = noder->TotalNodeNum();
+        int total_num_nodes = feature->TotalNodeNum();
         cache->InitializeCacheController(local_dev_id_, total_num_nodes);/*control cache memory by current actor*/
 
         memorypool_                     = new MemoryPool(interbatch_concurrency);
@@ -229,7 +229,7 @@ public:
         memorypool_->SetTmpPartOff(tmp_part_off);
 
 
-        int32_t float_attr_len = noder->GetFloatAttrLen();
+        int32_t float_attr_len = feature->GetFloatAttrLen();
         float_attr_len_ = float_attr_len;
         env->InitializeSamplesBuffer(batch_size, num_ids_, float_attr_len_, local_dev_id_, interbatch_concurrency);
         current_pipe_ = 0;

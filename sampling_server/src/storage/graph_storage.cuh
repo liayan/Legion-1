@@ -2,7 +2,7 @@
 #ifndef GRAPH_STORAGE_H_
 #define GRAPH_STORAGE_H_
 
-#include "BuildInfo.h"
+#include "buildinfo.h"
 
 class GraphStorage {
 public: 

@@ -536,8 +536,6 @@ void RandomSample(
   int32_t         op_id,
   bool            is_presc) 
 {		
-	int32_t dev_id;
-	cudaGetDevice(&dev_id);
 	if(graph == nullptr){
 		std::cout<<"invalid storage ptr\n";
 		return;
@@ -656,13 +654,13 @@ void FeatureCacheLookup(
 	dim3 thread_num(1024, 1);
 	if(in_memory){
 		float* cpu_float_attrs = feature->GetAllFloatAttr();
-		zero_copy_with_aggregated_cache<<<block_num, thread_num, 0, (strm_hdl)>>>(
-			cpu_float_attrs, cache_float_attrs, float_attr_len,
-			sampled_ids, cache_index, cache_capacity,
-			node_counter, dst_float_buffer,
-			total_num_nodes,
-			dev_id, op_id
-		);
+		// zero_copy_with_aggregated_cache<<<block_num, thread_num, 0, (strm_hdl)>>>(
+		// 	cpu_float_attrs, cache_float_attrs, float_attr_len,
+		// 	sampled_ids, cache_index, cache_capacity,
+		// 	node_counter, dst_float_buffer,
+		// 	total_num_nodes,
+		// 	dev_id, op_id
+		// );
 	}
 	cudaCheckError();
 }	

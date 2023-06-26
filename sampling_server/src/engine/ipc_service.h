@@ -1,7 +1,7 @@
 #ifndef IPC_ENV_H
 #define IPC_ENV_H
 #include <semaphore.h>
-#include "BuildInfo.h"
+#include "buildinfo.h"
 
 class IPCEnv {
 public:

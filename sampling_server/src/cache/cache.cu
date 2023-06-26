@@ -1,11 +1,6 @@
 #include "cache.cuh"
 #include "cache_impl.cuh"
 
-using pair_type = bght::pair<int32_t, int32_t>;
-using index_pair_type = bght::pair<int32_t, char>;
-using offset_pair_type = bght::pair<int32_t, int32_t>;
-
-
 class PreSCCacheController : public CacheController {
 public:
     PreSCCacheController(int32_t train_step, int32_t device_count){
@@ -346,7 +341,7 @@ void UnifiedCache::FindTopo(
 }
 
 
-void UnifiedCache::CandidateSelection(int cache_agg_mode, GPUNodeStorage* noder, GPUGraphStorage* graph){
+void UnifiedCache::CandidateSelection(int cache_agg_mode, FeatureStorage* feature, GraphStorage* graph){
     std::cout<<"Start selecting cache candidates\n";
     std::vector<unsigned long long int*> node_access_time;
     std::vector<unsigned long long int*> edge_access_time;
@@ -382,7 +377,7 @@ void UnifiedCache::CandidateSelection(int cache_agg_mode, GPUNodeStorage* noder,
 
     std::cout<<"NVLink Clique: "<<Kc<<" GPU Per Clique: "<<Kg<<std::endl;
 
-    int32_t total_num_nodes = noder->TotalNodeNum();
+    int32_t total_num_nodes = feature->TotalNodeNum();
     for(int32_t i = 0; i < Kc; i++){
         cudaSetDevice(i*Kg);
         int32_t* node_cache_order;
@@ -429,12 +424,12 @@ void UnifiedCache::CandidateSelection(int cache_agg_mode, GPUNodeStorage* noder,
     is_presc_ = false;
 }
 
-void UnifiedCache::CostModel(int cache_agg_mode, GPUNodeStorage* noder, GPUGraphStorage* graph, std::vector<uint64_t>& counters, int32_t train_step){
+void UnifiedCache::CostModel(int cache_agg_mode, FeatureStorage* feature, GraphStorage* graph, std::vector<uint64_t>& counters, int32_t train_step){
     dim3 block_num(80,1);
     dim3 thread_num(1024,1);
-    int32_t total_num_nodes = noder->TotalNodeNum();
-    float* cpu_float_attrs = noder->GetAllFloatAttr();
-    int32_t float_attr_len = noder->GetFloatAttrLen();
+    int32_t total_num_nodes = feature->TotalNodeNum();
+    float* cpu_float_attrs = feature->GetAllFloatAttr();
+    int32_t float_attr_len = feature->GetFloatAttrLen();
     int64_t* csr_index = graph->GetCSRNodeIndexCPU();
     std::cout<<"Start solve cost model"<<std::endl;
     for(int32_t i = 0; i < Kc_; i++){
@@ -537,7 +532,7 @@ void UnifiedCache::CostModel(int cache_agg_mode, GPUNodeStorage* noder, GPUGraph
     }
 }
 
-void UnifiedCache::FillUp(int cache_agg_mode, GPUNodeStorage* noder, GPUGraphStorage* graph){
+void UnifiedCache::FillUp(int cache_agg_mode, FeatureStorage* feature, GraphStorage* graph){
     for(int32_t i = 0; i < Kc_; i++){
         int cache_expand;
         if(cache_agg_mode == 0){
@@ -565,7 +560,7 @@ void UnifiedCache::FillUp(int cache_agg_mode, GPUNodeStorage* noder, GPUGraphSto
         d_float_feature_cache_ptr_[i] = new_ptr;
     }
 
-    float* cpu_float_attrs = noder->GetAllFloatAttr();
+    float* cpu_float_attrs = feature->GetAllFloatAttr();
 
     for(int32_t i = 0; i < Kc_; i++){
         for(int32_t j = 0; j < Kg_; j++){
@@ -646,12 +641,12 @@ void UnifiedCache::AccessCount(
 void UnifiedCache::FeatCacheLookup(){
     dim3 block_num(58, 1);
 	dim3 thread_num(1024, 1);
-    float* cpu_float_attrs = noder->GetAllFloatAttr();
-    zero_copy_with_aggregated_cache<<<block_num, thread_num, 0, (strm_hdl)>>>(
-        cpu_float_attrs, cache_float_attrs, float_attr_len,
-        sampled_ids, cache_index, cache_capacity,
-        node_counter, dst_float_buffer,
-        total_num_nodes,
-        dev_id, op_id
-    );
+    // float* cpu_float_attrs = feature->GetAllFloatAttr();
+    // zero_copy_with_aggregated_cache<<<block_num, thread_num, 0, (strm_hdl)>>>(
+    //     cpu_float_attrs, cache_float_attrs, float_attr_len,
+    //     sampled_ids, cache_index, cache_capacity,
+    //     node_counter, dst_float_buffer,
+    //     total_num_nodes,
+    //     dev_id, op_id
+    // );
 }

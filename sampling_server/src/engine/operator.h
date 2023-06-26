@@ -21,7 +21,7 @@ public:
 };
 
 Operator* NewBatchGenerateOP(int op_id);
-Operator* NewRandomSampler(int op_id);
+Operator* NewRandomSampleOP(int op_id);
 Operator* NewCacheLookupOP(int op_id);
 Operator* NewSSDIOSubmitOP(int op_id);
 Operator* NewSSDIOCompleteOP(int op_id);

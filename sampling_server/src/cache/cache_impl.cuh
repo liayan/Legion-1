@@ -40,7 +40,9 @@
 #include <rkg.hpp>
 #include <type_traits>
 
-
+using pair_type = bght::pair<int32_t, int32_t>;
+using index_pair_type = bght::pair<int32_t, char>;
+using offset_pair_type = bght::pair<int32_t, int32_t>;
 
 // Macro for checking cuda errors following a cuda launch or api call
 #define cudaCheckError()                                       \

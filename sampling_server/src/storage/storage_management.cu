@@ -291,10 +291,10 @@ void StorageManagement::Initialze(int32_t shard_count){
     env_ = NewIPCEnv(shard_count);
     env_ -> Coordinate(info);
 
-    feature_ = NewGPUMemoryNodeStorage();
+    feature_ = NewCompleteFeatureStorage();
     feature_ -> Build(info);  
 
-    graph_ = NewGPUMemoryGraphStorage();
+    graph_ = NewCompleteGraphStorage();
     graph_ -> Build(info);
 
     cudaCheckError();

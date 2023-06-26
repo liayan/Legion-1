@@ -113,11 +113,11 @@ public:
         void* stream, 
         int32_t dev_id);
 
-    void CandidateSelection(int cache_agg_mode, GPUNodeStorage* noder, GPUGraphStorage* graph);
+    void CandidateSelection(int cache_agg_mode, FeatureStorage* feature, GraphStorage* graph);
     
-    void CostModel(int cache_agg_mode, GPUNodeStorage* noder, GPUGraphStorage* graph, std::vector<uint64_t>& counters, int32_t train_step);
+    void CostModel(int cache_agg_mode, FeatureStorage* feature, GraphStorage* graph, std::vector<uint64_t>& counters, int32_t train_step);
 
-    void FillUp(int cache_agg_mode, GPUNodeStorage* noder, GPUGraphStorage* graph);
+    void FillUp(int cache_agg_mode, FeatureStorage* feature, GraphStorage* graph);
     
     float* Float_Feature_Cache(int32_t dev_id);//return all features
     

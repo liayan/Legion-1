@@ -2,7 +2,7 @@
 #include "operator_impl.cuh"
 #include "storage_management.cuh"
 #include "graph_storage.cuh"
-#include "feature_torage.cuh"
+#include "feature_storage.cuh"
 #include "ipc_service.h"
 #include "cache.cuh"
 #include "memorypool.cuh"

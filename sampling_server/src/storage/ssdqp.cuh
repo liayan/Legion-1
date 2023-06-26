@@ -1,7 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <assert.h>
-#include "common.cuh"
+#include "system_config.cuh"
 class SSDQueuePair
 {
 public:

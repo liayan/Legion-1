@@ -1,6 +1,6 @@
 #pragma once
 #include "ssdqp.cuh"
-#include "common.cuh"
+#include "system_config.cuh"
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>

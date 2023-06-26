@@ -1,4 +1,4 @@
-#include "CUDA_IPC_Service.h"
+#include "ipc_service.h"
 
 #include <iostream>
 #include <cstdint>

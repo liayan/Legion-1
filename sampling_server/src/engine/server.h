@@ -15,7 +15,7 @@ struct RunnerParams {
 
 class Server {
 public:
-    virtual void Initialize(int global_shard_count) = 0;
+    virtual void Initialize(int global_shard_count, std::vector<int> fanout) = 0;
     virtual void PreSc(int cache_agg_mode) = 0;
     virtual void Run() = 0;
     virtual void Finalize() = 0;

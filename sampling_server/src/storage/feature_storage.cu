@@ -1,19 +1,18 @@
 #include "feature_storage.cuh"
 #include "feature_storage_impl.cuh"
-#include "iostack.cuh"
-#include "iomerge.cuh"
+
 
 #include <iostream>
 
-class GPUMemoryNodeStorage : public FeatureStorage{
+class CompleteFeatureStorage : public FeatureStorage{
 public: 
-    GPUMemoryNodeStorage(){
+    CompleteFeatureStorage(){
     }
 
-    virtual ~GPUMemoryNodeStorage(){};
+    virtual ~CompleteFeatureStorage(){};
 
     void Build(BuildInfo* info) override {
-        iostack_ = new IOStack(info->num_ssd, info->num_warp_per_ssd);
+        // iostack_ = new IOStack(info->num_ssd, info->num_warp_per_ssd);
 
         int32_t partition_count = info->partition_count;
         total_num_nodes_ = info->total_num_nodes;
@@ -180,8 +179,8 @@ public:
 
     void IOSubmit(int32_t* cache_index, int64_t* sampled_ids, cudaStream_t stream){
 
-        iomerge_->do_io_merge();
-        iostack_->do_io_req();
+        // iomerge_->do_io_merge();
+        // iostack_->do_io_req();
 
     }
 
@@ -208,13 +207,13 @@ private:
     unsigned long long* d_req_count_;
 
     IOStack* iostack_;//single GPU multi-SSD
-    IOMerge* iomerge_;
+    // IOMerge* iomerge_;
 
-    friend FeatureStorage* NewGPUMemoryNodeStorage();
+    friend FeatureStorage* NewCompleteFeatureStorage();
 };
 
 extern "C" 
-FeatureStorage* NewGPUMemoryNodeStorage(){
-    GPUMemoryNodeStorage* ret = new GPUMemoryNodeStorage();
+FeatureStorage* NewCompleteFeatureStorage(){
+    CompleteFeatureStorage* ret = new CompleteFeatureStorage();
     return ret;
 }

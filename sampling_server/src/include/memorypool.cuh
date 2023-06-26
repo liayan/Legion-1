@@ -4,6 +4,18 @@
 #include <iostream>
 #include <vector>
 
+// Macro for checking cuda errors following a cuda launch or api call
+#define cudaCheckError()                                       \
+  {                                                            \
+    cudaError_t e = cudaGetLastError();                        \
+    if (e != cudaSuccess) {                                    \
+      printf("Cuda failure %s:%d: '%s'\n", __FILE__, __LINE__, \
+             cudaGetErrorString(e));                           \
+      exit(EXIT_FAILURE);                                      \
+    }                                                          \
+  }
+  
+
 extern "C"
 void* d_alloc_space(int64_t num_bytes) {
     void *ret;

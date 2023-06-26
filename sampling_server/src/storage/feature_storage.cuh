@@ -1,7 +1,7 @@
 #ifndef FEATURE_STORAGE_H_
 #define FEATURE_STORAGE_H_
 
-#include "BuildInfo.h"
+#include "buildinfo.h"
 
 class FeatureStorage {
 public: 
