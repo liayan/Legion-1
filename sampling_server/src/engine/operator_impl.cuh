@@ -18,7 +18,8 @@ void BatchGenerate(
 	int32_t         counter, 
   int32_t         part_id,
   int32_t         dev_id,
-  int32_t         mode
+  int32_t         mode,
+  bool            is_presc
 );
 
 extern "C"											
@@ -37,28 +38,24 @@ extern "C"
 void FeatureCacheLookup(
   cudaStream_t    strm_hdl,
   UnifiedCache*   cache, 
-  FeatureStorage* feature,
   MemoryPool*     memorypool,
-  int32_t         dev_id,
   int32_t         op_id,
-  bool            in_memory
+  int32_t         dev_id
 );
 
 extern "C"
 void IOSubmit(
 	cudaStream_t    strm_hdl, 
-	GraphStorage*   graph, 
-	UnifiedCache*   cache,
+	FeatureStorage* feature,
   MemoryPool*     memorypool,
-	int32_t         dev_id,
-  int32_t         mode
+	int32_t			    op_id,
+	int32_t         dev_id
 );
 
 extern "C"
 void IOComplete(
   cudaStream_t    strm_hdl, 
   UnifiedCache*   cache, 
-  FeatureStorage* feature,
   MemoryPool*     memorypool,
   int32_t         dev_id,
   int32_t         mode

@@ -21,8 +21,9 @@ public:
         int32_t mode                = memorypool->GetCurrentMode();
         int32_t iter                = memorypool->GetIter();
         int32_t batch_size          = env->GetCurrentBatchsize(device_id, mode);
+        bool is_presc               = params->is_presc;
 
-        BatchGenerate(params->stream, feature, cache, memorypool, batch_size, iter, device_id, device_id, mode);
+        BatchGenerate(params->stream, feature, cache, memorypool, batch_size, iter, device_id, device_id, mode, is_presc);
         cudaEventRecord(((params->event)), ((params->stream)));
         cudaCheckError();
     }
@@ -65,13 +66,13 @@ public:
         op_id_ = op_id;
     }
     void run(OpParams* params) override {
-        FeatureStorage* feature     = (FeatureStorage*)(params->feature);
         UnifiedCache* cache         = (UnifiedCache*)(params->cache);
         MemoryPool* memorypool      = (MemoryPool*)(params->memorypool);
-        bool in_memory              = params->in_memory;
         int32_t device_id           = params->device_id;
 
-        FeatureCacheLookup(params->stream, cache, feature, memorypool, device_id, op_id_, in_memory);
+        FeatureCacheLookup(params->stream, cache, memorypool, op_id_, device_id);
+        cudaEventRecord(((params->event)), ((params->stream)));
+        cudaCheckError();
     }
 private:
     int op_id_;
@@ -87,14 +88,13 @@ public:
         op_id_ = op_id;
     }
     void run(OpParams* params) override {
-        UnifiedCache* cache         = (UnifiedCache*)(params->cache);
-        GraphStorage* graph         = (GraphStorage*)(params->graph);
+        FeatureStorage* feature     = (FeatureStorage*)(params->feature);
         MemoryPool* memorypool      = (MemoryPool*)(params->memorypool);
         int32_t device_id           = params->device_id;
-        int mode                    = memorypool->GetCurrentMode();
 
-        IOSubmit(params->stream, graph, cache, memorypool, device_id, mode);
+        IOSubmit(params->stream, feature, memorypool, op_id_, device_id);
         cudaEventRecord(((params->event)), ((params->stream)));
+        cudaCheckError();
     }
 private:
     int op_id_;
@@ -110,15 +110,14 @@ public:
         op_id_ = op_id;
     }
     void run(OpParams* params) override {
-        GraphStorage* graph         = (GraphStorage*)(params->graph);
         UnifiedCache* cache         = (UnifiedCache*)(params->cache);
-        FeatureStorage* feature     = (FeatureStorage*)(params->feature);
         MemoryPool* memorypool      = (MemoryPool*)(params->memorypool);
         int mode                    = memorypool->GetCurrentMode();
         int32_t device_id           = params->device_id;
 
-        IOComplete(params->stream, cache, feature, memorypool, device_id, mode);
+        IOComplete(params->stream, cache, memorypool, device_id, mode);
         cudaEventRecord(((params->event)), ((params->stream)));
+        cudaCheckError();
     }
 private:
     int op_id_;

@@ -23,23 +23,14 @@ public:
     virtual int32_t TestingSetSize(int32_t part_id) const = 0;
 
     virtual int32_t TotalNodeNum() const = 0;
-    virtual int64_t* GetAllIntAttr() const = 0;
-    virtual int32_t GetIntAttrLen() const = 0;
-    virtual float* GetAllFloatAttr() const = 0;
-    virtual int32_t GetFloatAttrLen() const = 0;
+    virtual float* GetAllFloatFeature() const = 0;
+    virtual int32_t GetFloatFeatureLen() const = 0;
 
     virtual void Print(BuildInfo* info) = 0;
     
-    virtual void GetBamFloatAttr(float** cache_float_attrs, int32_t float_attr_len,
-                        int32_t* sampled_ids, int32_t* cache_index, int32_t cache_capacity,
-                        int32_t* node_counter, float* dst_float_buffer,
-                        int32_t total_num_nodes,
-                        int32_t dev_id,
-                        int32_t op_id, cudaStream_t strm_hdl) = 0;//single gpu multi-ssd for now
-    
-    void IOSubmit(){
-        
-    }
+    virtual void IOSubmit(int32_t* sampled_ids, int32_t* cache_index,
+                  int32_t* node_counter, float* dst_float_buffer,
+                  int32_t op_id, int32_t dev_id, cudaStream_t strm_hdl) = 0;
 };
 
 extern "C" 

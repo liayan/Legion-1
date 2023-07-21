@@ -47,13 +47,15 @@ private:
   int32_t validation_set_num_;
   int32_t testing_set_num_;
 
-  int32_t float_attr_len_;
+  int32_t float_feature_len_;
 
   int64_t cache_memory_;
 
   std::string dataset_path_;
   int32_t raw_batch_size_;
   int32_t epoch_;
+  int32_t num_ssd_;
+  int32_t num_queues_per_ssd_;
 
   GraphStorage* graph_;
   FeatureStorage* feature_;

@@ -65,8 +65,7 @@ class UnifiedCache{
 public:
     void Initialize(
         int64_t cache_memory,
-        int32_t int_attr_len, 
-        int32_t float_attr_len, 
+        int32_t float_feature_len, 
         int32_t train_step, 
         int32_t device_count);
     
@@ -75,8 +74,6 @@ public:
         int32_t total_num_nodes);
 
     void Finalize(int32_t dev_id);
-
-    int32_t NodeCapacity(int32_t dev_id);
 
     //these api will change, find, update, clear
     void FindFeat(
@@ -119,19 +116,21 @@ public:
 
     void FillUp(int cache_agg_mode, FeatureStorage* feature, GraphStorage* graph);
     
-    float* Float_Feature_Cache(int32_t dev_id);//return all features
-    
-    float** Global_Float_Feature_Cache(int32_t dev_id);
-
-    int64_t* Int_Feature_Cache(int32_t dev_id);
-
     int32_t MaxIdNum(int32_t dev_id);
 
     unsigned long long int* GetEdgeAccessedMap(int32_t dev_id);
     
-    void FeatCacheLookup();
+    void FeatCacheLookup(int32_t* sampled_ids, int32_t* cache_index,
+                         int32_t* node_counter, float* dst_float_buffer,
+                         int32_t op_id, int32_t dev_id, cudaStream_t strm_hdl);
 
 private:    
+    int32_t NodeCapacity(int32_t dev_id);
+
+    float* Float_Feature_Cache(int32_t dev_id);//return all features
+    
+    float** Global_Float_Feature_Cache(int32_t dev_id);
+
     std::vector<bool> dev_ids_;/*valid device, indexed by device id, False means invalid, True means valid*/
     
     int32_t device_count_;
@@ -156,8 +155,9 @@ private:
     std::vector<float*> float_feature_cache_; 
     std::vector<float**> d_float_feature_cache_ptr_;
 
-    int32_t int_attr_len_;
-    int32_t float_attr_len_;
+    int32_t float_feature_len_;
+    int32_t total_num_nodes_;
+    float*  cpu_float_features_;
 
     bool is_presc_;
 };

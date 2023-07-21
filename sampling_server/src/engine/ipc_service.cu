@@ -8,17 +8,11 @@
 #include <chrono>
 #include <vector>
 #include <semaphore.h>
-
-#include "helper_multiprocess.h"
 #include <stdio.h>
 #include <stdlib.h>
 
-#define MAX_DEVICE 8
-#define PIPELINE_DEPTH 2
-#define MEMORY_USAGE 7
-#define TRAINMODE 0
-#define VALIDMODE 1
-#define TESTMODE  2
+#include "helper_multiprocess.h"
+#include "system_config.cuh"
 
 // Macro for checking cuda errors following a cuda launch or api call
 #define cudaCheckError()                                       \
@@ -33,7 +27,7 @@
 
 typedef struct shmStruct_st {
   int32_t steps[3];
-  cudaIpcMemHandle_t memHandle[MAX_DEVICE][PIPELINE_DEPTH][MEMORY_USAGE];
+  cudaIpcMemHandle_t memHandle[MAX_DEVICE][INTERBATCH_CON][MEMORY_USAGE];
 } shmStruct;
 
 class CUDAIPCEnv : public IPCEnv {
@@ -299,7 +293,7 @@ public:
   void Finalize() override {
     for(int32_t i = 0; i < device_count_; i++){
       cudaSetDevice(i);
-      for(int32_t j = 0; j < PIPELINE_DEPTH; j++){
+      for(int32_t j = 0; j < INTERBATCH_CON; j++){
         cudaFree(ids_[i][j]);
         cudaFree(float_features_[i][j]);
         cudaFree(labels_[i][j]);

@@ -10,7 +10,7 @@ BIN_DIR := $(BUILD_DIR)/bin
 THIRD_PARTY_DIR := $(ROOT)/third_party
 PYTHON_DIR := $(ROOT)/python
 SRC_DIR = $(ROOT)/src
-SSD_DRIVER_DIR := /home/zhzh/bam/src/linux
+SSD_DRIVER_DIR := /home/sunjie/bam/src/linux
 
 
 clean:
@@ -32,7 +32,8 @@ NVCXXFLAGS := -std=c++17 -arch=sm_80 \
 
 
 CXX := g++
-CXXFLAGS := -std=c++17 -fPIC -O2
+CXXFLAGS := -std=c++17 -fPIC -O2 \
+			-I $(SRC_DIR)/engine
 
 ################################## main ########################################### 
 main: core
@@ -41,10 +42,11 @@ main: core
 	@mkdir -p $(LIB_DIR)
 	@mkdir -p $(BIN_DIR)
 	@echo $(CORE_H)
-	$(NVCXX) $(NVCXXFLAGS) -shared src/main.cpp  \
+	$(CXX) $(CXXFLAGS) src/main.cpp  \
 		-L /usr/local/cuda/lib64 \
-		-lcudart \
-		-o $(BIN_DIR)/legion
+		$(CORE_OBJ) \
+		-lcudart -lpthread\
+		-o $(BIN_DIR)/legion -lrt
 
 
 ################################## core ########################################### 
@@ -52,26 +54,27 @@ CORE_DIR := $(SRC_DIR)
 CORE_BUILT_DIR := $(BUILD_DIR)/built
 CORE_DIRS := $(shell find "src" -maxdepth 3 -type d)
 CORE_H := $(foreach dir,$(CORE_DIRS),$(wildcard $(dir)/*.h))
+CORE_CUH := $(foreach dir,$(CORE_DIRS),$(wildcard $(dir)/*.cuh))
 CORE_CU := $(foreach dir,$(CORE_DIRS),$(wildcard $(dir)/*.cu))
 CORE_OBJ := $(addprefix $(CORE_BUILT_DIR)/,$(patsubst %.cu,%.o,$(CORE_CU)))
 
-$(CORE_BUILT_DIR)/src/%.o:$(CORE_DIR)/%.cu $(CORE_H)
+$(CORE_BUILT_DIR)/src/%.o:$(CORE_DIR)/%.cu $(CORE_H) $(CORE_CUH)
 	@mkdir -p $(CORE_BUILT_DIR)
 	@mkdir -p $(CORE_BUILT_DIR)/src
-	$(NVCXX) $(NVCXXFLAGS) -c $< -o $@ 
+	$(NVCXX) $(NVCXXFLAGS) -c $< -o $@ -lrt
 	
-$(CORE_BUILT_DIR)/src/cache/%.o:$(CORE_DIR)/cache/%.cu $(CORE_H)
+$(CORE_BUILT_DIR)/src/cache/%.o:$(CORE_DIR)/cache/%.cu $(CORE_H) $(CORE_CUH)
 	@mkdir -p $(CORE_BUILT_DIR)/src/cache
 	@echo $<
-	$(NVCXX) $(NVCXXFLAGS) -c $< -o $@
+	$(NVCXX) $(NVCXXFLAGS) -c $< -o $@ -lrt
 
-$(CORE_BUILT_DIR)/src/storage/%.o:$(CORE_DIR)/storage/%.cu $(CORE_H)
+$(CORE_BUILT_DIR)/src/storage/%.o:$(CORE_DIR)/storage/%.cu $(CORE_H) $(CORE_CUH)
 	@mkdir -p $(CORE_BUILT_DIR)/src/storage
-	$(NVCXX) $(NVCXXFLAGS) -c $< -o $@
+	$(NVCXX) $(NVCXXFLAGS) -c $< -o $@ -lrt
 
-$(CORE_BUILT_DIR)/src/engine/%.o:$(CORE_DIR)/engine/%.cu $(CORE_H)
+$(CORE_BUILT_DIR)/src/engine/%.o:$(CORE_DIR)/engine/%.cu $(CORE_H) $(CORE_CUH)
 	@mkdir -p $(CORE_BUILT_DIR)/src/engine
-	$(NVCXX) $(NVCXXFLAGS) -c $< -o $@
+	$(NVCXX) $(NVCXXFLAGS) -c $< -o $@ -lrt
 
 core: $(CORE_OBJ)
 

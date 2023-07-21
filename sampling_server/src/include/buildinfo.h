@@ -22,10 +22,8 @@ struct BuildInfo{
     std::vector<std::vector<int32_t>> testing_labels;
     //features
     int32_t total_num_nodes;
-    int32_t int_attr_len;
-    int32_t float_attr_len;
-    int64_t* host_int_attrs;//allocated by cudaHostAlloc
-    float* host_float_attrs;//allocated by cudaHostAlloc
+    int32_t float_feature_len;
+    float* host_float_feature;//allocated by cudaHostAlloc
 
     //bam params
     uint32_t        cudaDevice;
@@ -67,6 +65,10 @@ struct BuildInfo{
     //train
     int32_t epoch;
     int32_t raw_batch_size;
+
+    //iostack 
+    int32_t num_ssd;
+    int32_t num_queues_per_ssd;
 };
 
 #endif

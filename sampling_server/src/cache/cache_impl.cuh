@@ -1,3 +1,4 @@
+#pragma once
 #ifndef CACHE_IMPL_H
 #define CACHE_IMPL_H
 
@@ -39,6 +40,8 @@
 #include <perf_report.hpp>
 #include <rkg.hpp>
 #include <type_traits>
+
+#include "system_config.cuh"
 
 using pair_type = bght::pair<int32_t, int32_t>;
 using index_pair_type = bght::pair<int32_t, char>;
@@ -143,38 +146,6 @@ __global__ void feature_cache_hit(int32_t* cache_offset, int32_t batch_size, int
     }
 }
 
-
-__global__ void Find_Kernel(
-    int32_t* sampled_ids,
-    int32_t* cache_offset,
-    int32_t* node_counter,
-    int32_t total_num_nodes,
-    int32_t op_id,
-    int32_t* cache_map)
-{
-    int32_t batch_size = 0;
-	int32_t node_off = 0;
-	if(op_id == 1){
-		node_off = node_counter[3];
-		batch_size = node_counter[4];
-	}else if(op_id == 3){
-		node_off = node_counter[5];
-		batch_size = node_counter[6];
-	}else if(op_id == 5){
-		node_off = node_counter[7];
-		batch_size = node_counter[8];
-	}
-    for(int32_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < batch_size; thread_idx += gridDim.x * blockDim.x){
-        int32_t id = sampled_ids[node_off + thread_idx];
-        // cache_offset[thread_idx] = -1;
-        if(id < 0){
-            cache_offset[thread_idx] = -1;
-        }else{
-            cache_offset[thread_idx] = cache_map[id%total_num_nodes];
-        }
-    }
-}
-
 __global__ void CacheHitTimes(int32_t* sampled_node, int32_t* node_counter){
     __shared__ int32_t count[2];
     if(threadIdx.x == 0){
@@ -182,7 +153,7 @@ __global__ void CacheHitTimes(int32_t* sampled_node, int32_t* node_counter){
         count[1] = 0;
     }
     __syncthreads();
-    int32_t num_nodes = node_counter[9];
+    int32_t num_nodes = node_counter[INTRABATCH_CON * 2 + 1];
     for(int32_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < num_nodes; thread_idx += gridDim.x * blockDim.x){
         int32_t cid = sampled_node[thread_idx];
         if(cid >= 0){
@@ -191,19 +162,19 @@ __global__ void CacheHitTimes(int32_t* sampled_node, int32_t* node_counter){
     }
     __syncthreads();
     if(threadIdx.x == 0){
-        atomicAdd(node_counter + 10, count[0]);
+        atomicAdd(node_counter + INTRABATCH_CON * 2 + 2, count[0]);
     }
 }
 
-__global__ void FeatFillUp(int32_t capacity, int32_t float_attr_len, float* feature_cache, float* cpu_float_attrs, int32_t* QF, int32_t Kg, int32_t Ki){
-    for(int64_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < int64_t(capacity) * float_attr_len; thread_idx += gridDim.x * blockDim.x){
-        int32_t id = QF[(thread_idx / float_attr_len) * Kg + Ki];
-        feature_cache[thread_idx] = cpu_float_attrs[int64_t(id) * float_attr_len + thread_idx % float_attr_len];
+__global__ void FeatFillUp(int32_t capacity, int32_t float_feature_len, float* feature_cache, float* cpu_float_feature, int32_t* QF, int32_t Kg, int32_t Ki){
+    for(int64_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < int64_t(capacity) * float_feature_len; thread_idx += gridDim.x * blockDim.x){
+        int32_t id = QF[(thread_idx / float_feature_len) * Kg + Ki];
+        feature_cache[thread_idx] = cpu_float_feature[int64_t(id) * float_feature_len + thread_idx % float_feature_len];
     }
 }
 
 __global__ void HotnessMeasure(int32_t* new_batch_ids, int32_t* node_counter, unsigned long long int* access_map){
-    int32_t num_candidates = node_counter[9];
+    int32_t num_candidates = node_counter[INTRABATCH_CON * 2 + 1];
     for(int32_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < num_candidates; thread_idx += gridDim.x * blockDim.x){
         int32_t cid = new_batch_ids[thread_idx];
         if(cid >= 0){
@@ -215,42 +186,36 @@ __global__ void HotnessMeasure(int32_t* new_batch_ids, int32_t* node_counter, un
 
 
 __global__ void feat_cache_lookup(
-	float* cpu_float_attrs, float** cache_float_attrs, int32_t float_attr_len,
+	float* cpu_float_feature, float** cache_float_feature, int32_t float_feature_len,
 	int32_t* sampled_ids, int32_t* cache_index, int32_t cache_capacity,
 	int32_t* node_counter, float* dst_float_buffer,
 	int32_t total_num_nodes,
 	int32_t dev_id,
 	int32_t op_id)
 {
+    int32_t node_off = 0;
 	int32_t batch_size = 0;
-	int32_t node_off = 0;
-	if(op_id == 1){
-		node_off = node_counter[3];
-		batch_size = node_counter[4];
-	}else if(op_id == 3){
-		node_off = node_counter[5];
-		batch_size = node_counter[6];
-	}else if(op_id == 5){
-		node_off = node_counter[7];
-		batch_size = node_counter[8];
-	}
+
+    node_off   = node_counter[(op_id % INTRABATCH_CON) * 2];
+    batch_size = node_counter[(op_id % INTRABATCH_CON) * 2 + 1];
+
 	int32_t gidx;//global cache index
 	int32_t fidx;//local cache index
 	int32_t didx;//device index
 	int32_t foffset;
-	if(float_attr_len > 0){
-		for(int64_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < (int64_t(batch_size) * float_attr_len); thread_idx += blockDim.x * gridDim.x){
-			gidx = (cache_index[thread_idx / float_attr_len]);
+	if(float_feature_len > 0){
+		for(int64_t thread_idx = threadIdx.x + blockDim.x * blockIdx.x; thread_idx < (int64_t(batch_size) * float_feature_len); thread_idx += blockDim.x * gridDim.x){
+			gidx = (cache_index[thread_idx / float_feature_len]);
 			didx = gidx / cache_capacity;//device idx in clique
 			fidx = gidx % cache_capacity;
-			foffset = thread_idx % float_attr_len;
-			if(gidx < 0){/*cache miss*/
-				fidx = sampled_ids[node_off + (thread_idx / float_attr_len)];
+			foffset = thread_idx % float_feature_len;
+			if(gidx == CACHECPU_FLAG){/*cache in cpu*/
+				fidx = sampled_ids[node_off + (thread_idx / float_feature_len)];
 				if(fidx >= 0){
-					dst_float_buffer[int64_t(int64_t((int64_t(node_off) * float_attr_len)) + thread_idx)] = cpu_float_attrs[int64_t(int64_t(int64_t(fidx%total_num_nodes) * float_attr_len) + foffset)];
+					dst_float_buffer[int64_t(int64_t((int64_t(node_off) * float_feature_len)) + thread_idx)] = cpu_float_feature[int64_t(int64_t(int64_t(fidx%total_num_nodes) * float_feature_len) + foffset)];
 				}
-			}else{/*cache hit, find global position*/
-				dst_float_buffer[int64_t(int64_t((int64_t(node_off) * float_attr_len)) + thread_idx)] = cache_float_attrs[didx][int64_t(int64_t(int64_t(fidx) * float_attr_len) + foffset)];
+			}else if(gidx >= 0){/*cache hit, find global position*/
+				dst_float_buffer[int64_t(int64_t((int64_t(node_off) * float_feature_len)) + thread_idx)] = cache_float_feature[didx][int64_t(int64_t(int64_t(fidx) * float_feature_len) + foffset)];
 			}
 		}
 	}

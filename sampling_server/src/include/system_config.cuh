@@ -29,14 +29,32 @@
 #define RW_RETRY_MASK 0x80000000
 #define SQ_ITEM_SIZE 64
 #define WARP_SIZE 32
+#define SQ_HEAD_MASK 0xffff
 
-#define MAX_IO_SIZE 4096 // TODO: implement prp list
+#define MAX_IO_SIZE 4096
 #define ITEM_SIZE 512
 #define MAX_ITEMS (MAX_IO_SIZE / ITEM_SIZE)
 #define NUM_THREADS_PER_BLOCK 512
 #define ADMIN_QUEUE_DEPTH 64
-#define QUEUE_DEPTH 128
-#define WARP_IOBUF_SIZE (MAX_IO_SIZE * QUEUE_DEPTH) // TODO: change to queue
+#define QUEUE_DEPTH 4096
+#define QUEUE_IOBUF_SIZE (MAX_IO_SIZE * QUEUE_DEPTH)
+#define NUM_PRP_ENTRIES (MAX_IO_SIZE / HOST_PGSZ)
+#define PRP_SIZE (NUM_PRP_ENTRIES * sizeof(uint64_t))
+#define NUM_LBS_PER_SSD 0x100000000
+#define MAX_SSDS_SUPPORTED 16
+
+
+#define INTERBATCH_CON 2 //inter-batch pipeline concurrency 
+#define INTRABATCH_CON 3 //intra-batch pipeline concurrency
+
+#define MAX_DEVICE 8
+#define MEMORY_USAGE 7
+#define TRAINMODE 0
+#define VALIDMODE 1
+#define TESTMODE  2
+
+#define CACHEMISS_FLAG -2
+#define CACHECPU_FLAG -1
 
 #define CHECK(ans) gpuAssert((ans), __FILE__, __LINE__)
 

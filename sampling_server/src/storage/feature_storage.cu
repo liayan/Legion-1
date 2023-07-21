@@ -1,7 +1,6 @@
 #include "feature_storage.cuh"
 #include "feature_storage_impl.cuh"
 
-
 #include <iostream>
 
 class CompleteFeatureStorage : public FeatureStorage{
@@ -12,20 +11,16 @@ public:
     virtual ~CompleteFeatureStorage(){};
 
     void Build(BuildInfo* info) override {
-        // iostack_ = new IOStack(info->num_ssd, info->num_warp_per_ssd);
+        iostack_ = new IOStack(info->num_ssd, info->num_queues_per_ssd);
+        iomerge_ = new IOMerge(64, 1024, 8, 512, 4000000, 1000000000);
 
         int32_t partition_count = info->partition_count;
         total_num_nodes_ = info->total_num_nodes;
-        int_attr_len_ = info->int_attr_len;
-        float_attr_len_ = info->float_attr_len;
-        int64_t* host_int_attrs = info->host_int_attrs;
-        float* host_float_attrs = info->host_float_attrs;
+        float_feature_len_ = info->float_feature_len;
+        float* host_float_feature = info->host_float_feature;
 
-        if(int_attr_len_ > 0){
-            cudaHostGetDevicePointer(&int_attrs_, host_int_attrs, 0);
-        }
-        if(float_attr_len_ > 0){
-            cudaHostGetDevicePointer(&float_attrs_, host_float_attrs, 0);
+        if(float_feature_len_ > 0){
+            cudaHostGetDevicePointer(&float_feature_, host_float_feature, 0);
         }
         cudaCheckError();
 
@@ -107,7 +102,7 @@ public:
     };
 
     void Finalize() override {
-        cudaFreeHost(float_attrs_);
+        cudaFreeHost(float_feature_);
         for(int32_t i = 0; i < partition_count_; i++){
             cudaSetDevice(i);
             cudaFree(training_set_ids_[i]);
@@ -152,36 +147,35 @@ public:
     int32_t TotalNodeNum() const override {
         return total_num_nodes_;
     }
-	int64_t* GetAllIntAttr() const override {
-        return int_attrs_;
+
+    float* GetAllFloatFeature() const override {
+        return float_feature_;
     }
-    int32_t GetIntAttrLen() const override {
-        return int_attr_len_;
-    }
-    float* GetAllFloatAttr() const override {
-        return float_attrs_;
-    }
-    int32_t GetFloatAttrLen() const override {
-        return float_attr_len_;
+    int32_t GetFloatFeatureLen() const override {
+        return float_feature_len_;
     }
 
     void Print(BuildInfo* info) override {
     }
 
-    void GetBamFloatAttr(float** cache_float_attrs, int32_t float_attr_len,
-                        int32_t* sampled_ids, int32_t* cache_index, int32_t cache_capacity,
-                        int32_t* node_counter, float* dst_float_buffer,
-                        int32_t total_num_nodes,
-                        int32_t dev_id,
-                        int32_t op_id, cudaStream_t strm_hdl) override {
-
-    }
-
-    void IOSubmit(int32_t* cache_index, int64_t* sampled_ids, cudaStream_t stream){
-
-        // iomerge_->do_io_merge();
-        // iostack_->do_io_req();
-
+    void IOSubmit(int32_t* sampled_ids, int32_t* cache_index,
+                  int32_t* node_counter, float* dst_float_buffer,
+                  int32_t op_id, int32_t dev_id, cudaStream_t strm_hdl) override {
+		
+        int32_t* h_node_counter = (int32_t*)malloc(16*sizeof(int32_t));
+		cudaMemcpy(h_node_counter, node_counter, 64, cudaMemcpyDeviceToHost);
+		cudaCheckError();
+        int32_t node_off = 0;
+        int32_t batch_size = 0;
+    
+        node_off   = h_node_counter[(op_id % INTRABATCH_CON) * 2];
+        batch_size = h_node_counter[(op_id % INTRABATCH_CON) * 2 + 1];
+        if(batch_size > 0){
+            IOReq* req = iomerge_->no_merge(cache_index + node_off, sampled_ids + node_off, batch_size, dst_float_buffer + (int64_t(node_off) * float_feature_len_), strm_hdl);
+            cudaCheckError();
+            iostack_->submit_io_req(req, batch_size, strm_hdl);
+            cudaCheckError();
+        }
     }
 
 private:
@@ -199,15 +193,13 @@ private:
 
     int32_t partition_count_;
     int32_t total_num_nodes_;
-    int64_t* int_attrs_;
-    int32_t int_attr_len_;
-    float* float_attrs_;
-    int32_t float_attr_len_;
+    float* float_feature_;
+    int32_t float_feature_len_;
 
     unsigned long long* d_req_count_;
 
     IOStack* iostack_;//single GPU multi-SSD
-    // IOMerge* iomerge_;
+    IOMerge* iomerge_;
 
     friend FeatureStorage* NewCompleteFeatureStorage();
 };

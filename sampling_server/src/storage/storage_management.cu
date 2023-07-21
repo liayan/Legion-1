@@ -66,8 +66,8 @@ void StorageManagement::ReadMetaFIle(BuildInfo* info){
     std::cout<<"Graph nodes num:    "<<node_num_<<"\n";
     iss >> edge_num_;
     std::cout<<"Graph edges num:    "<<edge_num_<<"\n";
-    iss >> float_attr_len_;
-    std::cout<<"Feature dim:        "<<float_attr_len_<<"\n";
+    iss >> float_feature_len_;
+    std::cout<<"Feature dim:        "<<float_feature_len_<<"\n";
     iss >> training_set_num_;
     std::cout<<"Training set num:   "<<training_set_num_<<"\n";
     iss >> validation_set_num_;
@@ -81,6 +81,10 @@ void StorageManagement::ReadMetaFIle(BuildInfo* info){
     info->epoch = epoch_;
     iss >> partition_;
     std::cout<<"Partition?:         "<<partition_<<"\n";
+    iss >> num_ssd_;
+    std::cout<<"SSD Num?:           "<<num_ssd_<<"\n";
+    iss >> num_queues_per_ssd_;
+    std::cout<<"Q/SSD    ?:         "<<num_queues_per_ssd_<<"\n";
 
     info->cudaDevice = 0;
     info->cudaDeviceId = 0;
@@ -105,9 +109,12 @@ void StorageManagement::ReadMetaFIle(BuildInfo* info){
     info->queueDepth = 16;
     info->numQueues = 1;
     info->pageSize = 4096;
-    info->numElems = int64_t(node_num_) * float_attr_len_;
+    info->numElems = int64_t(node_num_) * float_feature_len_;
     info->random = true;
     info->ssdtype = 0;
+
+    info->num_ssd = num_ssd_;
+    info->num_queues_per_ssd = num_queues_per_ssd_;
 
 }
 
@@ -137,7 +144,7 @@ void StorageManagement::LoadFeature(BuildInfo* info){
     int32_t partition_count = info->partition_count;
 
     int32_t node_num = node_num_;
-    int32_t nf = float_attr_len_;
+    int32_t nf = float_feature_len_;
 
     info->numElems = uint64_t(node_num) * nf;
 
@@ -167,15 +174,15 @@ void StorageManagement::LoadFeature(BuildInfo* info){
     // std::vector<char> partition_index;
     int32_t* partition_index = (int32_t*)malloc(int64_t(node_num) * sizeof(int32_t));
     // partition_index.resize(node_num);
-    float* host_float_attrs;
-    cudaHostAlloc(&host_float_attrs, int64_t(int64_t(int64_t(node_num) * nf) * sizeof(float)), cudaHostAllocMapped);
+    float* host_float_feature;
+    cudaHostAlloc(&host_float_feature, int64_t(int64_t(int64_t(node_num) * nf) * sizeof(float)), cudaHostAllocMapped);
     cudaCheckError();
 
 
     mmap_trainingset_read(training_path, training_ids);
     mmap_trainingset_read(validation_path, validation_ids);
     mmap_trainingset_read(testing_path, testing_ids);
-    mmap_features_read(features_path, host_float_attrs);
+    // mmap_features_read(features_path, host_float_feature);
     mmap_labels_read(labels_path, all_labels);
     int32_t fdret = mmap_partition_read(partition_path, partition_index);
 
@@ -266,10 +273,8 @@ void StorageManagement::LoadFeature(BuildInfo* info){
         info->testing_set_num.push_back(info->testing_set_ids[part_id].size());
     }
 
-    info->host_float_attrs = host_float_attrs;
-    info->float_attr_len = float_attr_len_;
-    info->host_int_attrs = nullptr;
-    info->int_attr_len = 0;
+    info->host_float_feature = host_float_feature;
+    info->float_feature_len = float_feature_len_;
     info->total_num_nodes = node_num_;
     std::cout<<"Finish Partition\n";
 }
@@ -311,7 +316,7 @@ void StorageManagement::Initialze(int32_t shard_count){
     int32_t train_step = env_->GetTrainStep();
 
     cudaSetDevice(0);
-    cache_ -> Initialize(cache_memory_, 0, float_attr_len_, train_step, shard_count);
+    cache_ -> Initialize(cache_memory_, float_feature_len_, train_step, shard_count);
     cudaSetDevice(0);
     std::cout<<"Storage Initialized\n";
 }
