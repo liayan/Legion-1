@@ -1,20 +1,19 @@
-#include<iostream>
-#include<climits>
+#include <iostream>
+#include <climits>
 // #include <iomanip>
-#include<stdlib.h>
-#include<cuda.h>
-#include<vector>
-#include<algorithm>
+#include <stdlib.h>
+#include <cuda.h>
+#include <vector>
+#include <algorithm>
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
-#include<thrust/sort.h>
-#include<thrust/copy.h>
-#include<thrust/reduce.h>
-#include<thrust/shuffle.h>
-#include<unistd.h>
-#include<cub/cub.cuh>
+#include <thrust/sort.h>
+#include <thrust/copy.h>
+#include <thrust/reduce.h>
+#include <thrust/shuffle.h>
+#include <unistd.h>
+#include <cub/cub.cuh>
 // #include
-
 
 #define my_ULLONG_MAX (~0ULL)
 #define MAX_ITEMS 16//when setting to 32 will cause compilation error
@@ -53,34 +52,6 @@ struct cache_id{
         return this->ssd_id<lhs.ssd_id;
     }
 };
-struct IOReq{
-    uint64_t start_lb;
-    app_addr_t dest_addr[MAX_ITEMS];
-    int num_items;
-
-    __forceinline__ __host__ __device__ IOReq(){};
-
-    __forceinline__
-    __host__ __device__
-    IOReq(uint64_t ssd, uint64_t length) : start_lb(ssd), num_items(length)
-    {
-        for (int i = 0; i < num_items; i++)
-            dest_addr[i] = ~0ULL;
-    }
-
-    __host__ __device__ 
-    bool operator<(const IOReq &lhs) const
-    {
-        return this->start_lb < lhs.start_lb;
-    }
-
-    __forceinline__
-    __host__ __device__ 
-    ~IOReq()
-    {
-        // delete[] gpu_addr;
-    }
-};
 
 struct Compare{
     __device__ 
@@ -110,259 +81,240 @@ void print_uint64(uint64_t *D_array,uint64_t len){
 }
 
 __global__
-void print_Dret(IOReq* D_ret,uint64_t len,void *ssd_start_addr,void *gpu_start_addr,uint64_t typesize){
+void print_Dret(IOReq* d_ret,uint64_t len,void *ssd_start_addr,void *dst_float_buffer,uint64_t ssd_block_size){
     printf("print_Dret\n");
     for(uint64_t i=0;i<len;i++){
-        printf("cache:%lu\n",((uint64_t)D_ret[i].start_lb-(uint64_t)ssd_start_addr)/typesize);
-        printf("gpu0:%lu\n",((uint64_t)D_ret[i].dest_addr[0]-(uint64_t)gpu_start_addr)/typesize);
-        printf("gpu1:%lu\n",((uint64_t)D_ret[i].dest_addr[1]-(uint64_t)gpu_start_addr)/typesize);
-        printf("gpu2:%lu\n",((uint64_t)D_ret[i].dest_addr[2]-(uint64_t)gpu_start_addr)/typesize);
-        printf("gpu3:%lu\n",((uint64_t)D_ret[i].dest_addr[3]-(uint64_t)gpu_start_addr)/typesize);
-        printf("gpu4:%lu\n",((uint64_t)D_ret[i].dest_addr[4]-(uint64_t)gpu_start_addr)/typesize);
-        printf("gpu5:%lu\n",((uint64_t)D_ret[i].dest_addr[5]-(uint64_t)gpu_start_addr)/typesize);
-        printf("gpu6:%lu\n",((uint64_t)D_ret[i].dest_addr[6]-(uint64_t)gpu_start_addr)/typesize);
-        printf("gpu7:%lu\n\n",((uint64_t)D_ret[i].dest_addr[7]-(uint64_t)gpu_start_addr)/typesize);
+        printf("cache:%lu\n",((uint64_t)d_ret[i].start_lb-(uint64_t)ssd_start_addr)/ssd_block_size);
+        printf("gpu0:%lu\n",((uint64_t)d_ret[i].dest_addr[0]-(uint64_t)dst_float_buffer)/ssd_block_size);
+        printf("gpu1:%lu\n",((uint64_t)d_ret[i].dest_addr[1]-(uint64_t)dst_float_buffer)/ssd_block_size);
+        printf("gpu2:%lu\n",((uint64_t)d_ret[i].dest_addr[2]-(uint64_t)dst_float_buffer)/ssd_block_size);
+        printf("gpu3:%lu\n",((uint64_t)d_ret[i].dest_addr[3]-(uint64_t)dst_float_buffer)/ssd_block_size);
+        printf("gpu4:%lu\n",((uint64_t)d_ret[i].dest_addr[4]-(uint64_t)dst_float_buffer)/ssd_block_size);
+        printf("gpu5:%lu\n",((uint64_t)d_ret[i].dest_addr[5]-(uint64_t)dst_float_buffer)/ssd_block_size);
+        printf("gpu6:%lu\n",((uint64_t)d_ret[i].dest_addr[6]-(uint64_t)dst_float_buffer)/ssd_block_size);
+        printf("gpu7:%lu\n\n",((uint64_t)d_ret[i].dest_addr[7]-(uint64_t)dst_float_buffer)/ssd_block_size);
     }
 }
 
 __global__
-void print_Dret_ssd(uint64_t* D_ret_ssd,uint64_t len,void *ssd_start_addr,uint64_t typesize){
+void print_Dret_ssd(uint64_t* d_ret_ssd,uint64_t len,void *ssd_start_addr,uint64_t ssd_block_size){
     printf("print_Dret_ssd\n");
     for(uint64_t i=0;i<len;i++){
         // if(i==0){
-        //     printf("the first origin ssd:%lu\n",(uint64_t)D_ret_ssd[i]);
+        //     printf("the first origin ssd:%lu\n",(uint64_t)d_ret_ssd[i]);
         // }
-        printf("ssd:%lu\n",((uint64_t)D_ret_ssd[i]-(uint64_t)ssd_start_addr)/typesize);
+        printf("ssd:%lu\n",((uint64_t)d_ret_ssd[i]-(uint64_t)ssd_start_addr)/ssd_block_size);
     }
 }
 __global__
-void get_miss(cache_id *D_ssd_plus_buffer,uint32_t *D_cache_miss,uint64_t *D_ids,uint64_t D_buffer_cnt);
+void get_miss(cache_id *d_ssd_plus_buffer_,int32_t *cache_index,int32_t *input_ids,uint64_t input_num);
 
 __global__
-void merge_kernel(cache_id *D_ssd_plus_buffer,IOReq *D_ret,uint64_t *D_ret_ssd,uint64_t* D_split_flag,uint64_t lenth,
-                    void *ssd_start_addr,void *gpu_start_addr,uint64_t merge_lenth,uint64_t typesize);
+void no_merge_kernel(IOReq *d_ret,int32_t *cache_index,int32_t *input_ids,uint64_t input_num,
+                    void *dst_float_buffer,uint64_t ssd_block_size);
 
 __global__
-void split_flag(uint64_t *D_split_flag,cache_id *D_ssd_plus_buffer,uint64_t lenth,uint64_t merge_lenth);   
+void merge_kernel(cache_id *d_ssd_plus_buffer_,IOReq *d_ret,uint64_t *d_ret_ssd,uint64_t* d_split_flag_,uint64_t lenth,
+                    void *dst_float_buffer,uint64_t merge_lenth,uint64_t ssd_block_size);
+
+__global__
+void split_flag(uint64_t *d_split_flag_,cache_id *d_ssd_plus_buffer_,uint64_t lenth,uint64_t merge_lenth);   
 
 // __host__ __device__
 // bool cmp(IOReq a,IOReq b){
 //     return a.ssd_addr<b.ssd_addr;
 // }
 
-struct IO_Merge{
+struct IOMerge{
     void *ssd_start_addr;
-    void *gpu_start_addr;
-
+    uint64_t* p_miss_cnt_;
     uint64_t grid_size{1};//cuda param
     uint64_t block_size{1024};
 
-    uint64_t merge_lenth{8};
-    uint64_t typesize{512};//block size
-    uint64_t buffer_cnt;
+    uint64_t merge_lenth_{8};
+    uint64_t ssd_block_size{ITEM_SIZE};//block size
+    uint64_t init_buffer_cnt_;
     
-    cache_id* D_ssd_plus_buffer;
-    size_t temp_storage_bytes{102400000};//if the input size is too big, should set it when constructing
-    void *d_temp_storage;
-    // uint32_t *D_cache_miss{nullptr};
-    // uint64_t *D_ids{nullptr};
-    uint64_t* D_split_flag;
-    IOReq *D_ret;
-    uint64_t *D_ret_ssd;
+    cache_id* d_ssd_plus_buffer_;
+    size_t temp_storage_bytes_{102400000};//if the input size is too big, should set it when constructing
+    void *d_temp_storage_;
+    // int32_t *cache_index{nullptr};
+    // int32_t *input_ids{nullptr};
+    uint64_t* d_split_flag_;
+    IOReq *d_ret_;
+    uint64_t *d_ret_ssd_;
 
     // __forceinline__
     __host__ __device__
-    IO_Merge(void *ssd,void *gpu,uint64_t grid_size,uint64_t block_size,uint64_t merge_lenth,uint64_t typesize,uint64_t buffer_cnt,size_t temp_storage_bytes):
-            ssd_start_addr(ssd),gpu_start_addr(gpu),grid_size(grid_size),block_size(block_size),merge_lenth(merge_lenth),
-            typesize(typesize),buffer_cnt(buffer_cnt),temp_storage_bytes(temp_storage_bytes){
+    IOMerge(uint64_t grid_size,uint64_t block_size,uint64_t merge_lenth,uint64_t ssd_block_size,uint64_t init_buffer_cnt,size_t temp_storage_bytes):
+            grid_size(grid_size),block_size(block_size),merge_lenth_(merge_lenth),
+            ssd_block_size(ssd_block_size),init_buffer_cnt_(init_buffer_cnt),temp_storage_bytes_(temp_storage_bytes){
+            cudaMalloc((void **)&p_miss_cnt_,sizeof(uint64_t));
 
-            cudaMalloc((void **)&D_ssd_plus_buffer,sizeof(cache_id)*buffer_cnt);
-            cudaMalloc((void **)&d_temp_storage,temp_storage_bytes);
-            cudaMalloc((void **)&D_split_flag,sizeof(uint64_t)*buffer_cnt);
-            cudaMalloc((void **)&D_ret,sizeof(IOReq)*buffer_cnt);
-            cudaMalloc((void **)&D_ret_ssd,sizeof(uint64_t)*buffer_cnt); 
-            // cudaMalloc((void **)&D_ids,sizeof(uint64_t)*buffer_cnt);
-            // cudaMalloc((void **)&D_cache_miss,sizeof(uint32_t)*buffer_cnt);               
+            cudaMalloc((void **)&d_ssd_plus_buffer_,sizeof(cache_id)*init_buffer_cnt_);
+            cudaMalloc((void **)&d_temp_storage_,temp_storage_bytes_);
+            cudaMalloc((void **)&d_split_flag_,sizeof(uint64_t)*init_buffer_cnt_);
+            cudaMalloc((void **)&d_ret_,sizeof(IOReq)*init_buffer_cnt_);
+            cudaMalloc((void **)&d_ret_ssd_,sizeof(uint64_t)*init_buffer_cnt_); 
+            // cudaMalloc((void **)&input_ids,sizeof(uint64_t)*init_buffer_cnt_);
+            // cudaMalloc((void **)&cache_index,sizeof(int32_t)*init_buffer_cnt_);               
             };
     
     // __forceinline__
     __host__ __device__
-    IO_Merge(void *ssd,void *gpu,uint64_t grid_size,uint64_t block_size,uint64_t merge_lenth,uint64_t typesize,uint64_t buffer_cnt):
-            ssd_start_addr(ssd),gpu_start_addr(gpu),grid_size(grid_size),block_size(block_size),merge_lenth(merge_lenth),
-            typesize(typesize),buffer_cnt(buffer_cnt){
+    IOMerge(uint64_t grid_size,uint64_t block_size,uint64_t merge_lenth,uint64_t ssd_block_size,uint64_t init_buffer_cnt):
+            grid_size(grid_size),block_size(block_size),merge_lenth_(merge_lenth),
+            ssd_block_size(ssd_block_size),init_buffer_cnt_(init_buffer_cnt){
+            cudaMalloc((void **)&p_miss_cnt_,sizeof(uint64_t));
 
-            cudaMalloc((void **)&D_ssd_plus_buffer,sizeof(cache_id)*buffer_cnt);
-            cudaMalloc((void **)&d_temp_storage,temp_storage_bytes);
-            cudaMalloc((void **)&D_split_flag,sizeof(uint64_t)*buffer_cnt);
-            cudaMalloc((void **)&D_ret,sizeof(IOReq)*buffer_cnt);
-            cudaMalloc((void **)&D_ret_ssd,sizeof(uint64_t)*buffer_cnt); 
+            cudaMalloc((void **)&d_ssd_plus_buffer_,sizeof(cache_id)*init_buffer_cnt_);
+            cudaMalloc((void **)&d_temp_storage_,temp_storage_bytes_);
+            cudaMalloc((void **)&d_split_flag_,sizeof(uint64_t)*init_buffer_cnt_);
+            cudaMalloc((void **)&d_ret_,sizeof(IOReq)*init_buffer_cnt_);
+            cudaMalloc((void **)&d_ret_ssd_,sizeof(uint64_t)*init_buffer_cnt_); 
             
-            // cudaMalloc((void **)&D_ids,sizeof(uint64_t)*buffer_cnt);
-            // cudaMalloc((void **)&D_cache_miss,sizeof(uint32_t)*buffer_cnt);               
+            // cudaMalloc((void **)&input_ids,sizeof(uint64_t)*init_buffer_cnt_);
+            // cudaMalloc((void **)&cache_index,sizeof(int32_t)*init_buffer_cnt_);               
             };
 
     __forceinline__
     __host__ __device__
-    ~IO_Merge(){
+    ~IOMerge(){
         //maybe free the cuda memory
     }
 
     __host__
-    IOReq* call_kernel(uint32_t *D_cache_miss,uint64_t *D_ids,cudaStream_t stream){
+    IOReq* naive_merge(int32_t* cache_index, int32_t* input_ids, int32_t& input_num, float* dst_float_buffer, cudaStream_t stream){
 
-        cudaEvent_t start,stop;
-        cudaEventCreate(&start);
-        cudaEventCreate(&stop);
-        // print_uint64<<<1,1,0,stream>>>(D_ids,buffer_cnt);
-        cudaEventRecord(start,0);
         uint64_t miss_cnt;
-        uint64_t *p_miss_cnt;
-        cudaMalloc((void **)&p_miss_cnt,sizeof(uint64_t));
-        cub::DeviceReduce::Sum(NULL,temp_storage_bytes,D_cache_miss,p_miss_cnt,buffer_cnt,stream);
-        // printf("temp_storage_bytes:%d\n",temp_storage_bytes);
-        cub::DeviceReduce::Sum(d_temp_storage,temp_storage_bytes,D_cache_miss,p_miss_cnt,buffer_cnt,stream);
-        cudaMemcpy(&miss_cnt,p_miss_cnt,sizeof(uint64_t),cudaMemcpyDeviceToHost);
+        uint64_t *p_miss_cnt_;
+        cub::DeviceReduce::Sum(NULL,temp_storage_bytes_,cache_index,p_miss_cnt_,input_num,stream);
+        cub::DeviceReduce::Sum(d_temp_storage_,temp_storage_bytes_,cache_index,p_miss_cnt_,input_num,stream);
+        cudaMemcpy(&miss_cnt,p_miss_cnt_,sizeof(uint64_t),cudaMemcpyDeviceToHost);
         
-        get_miss<<<grid_size,block_size,0,stream>>>(D_ssd_plus_buffer,D_cache_miss,D_ids,buffer_cnt);
-        // cudaDeviceSynchronize();
-        // cudaCheckError();
+        get_miss<<<grid_size,block_size,0,stream>>>(d_ssd_plus_buffer_,cache_index,input_ids,input_num);
         
-
-        cub::DeviceRadixSort::SortPairs(NULL,temp_storage_bytes,D_ids,D_ids,
-                                        D_ssd_plus_buffer,D_ssd_plus_buffer,miss_cnt,
-                                        0,sizeof(uint64_t)*8,stream);
-        // printf("temp_storage_bytes:%d\n",temp_storage_bytes);
-
-        cub::DeviceRadixSort::SortPairs(d_temp_storage,temp_storage_bytes,D_ids,D_ids,
-                                        D_ssd_plus_buffer,D_ssd_plus_buffer,miss_cnt,
+        cub::DeviceRadixSort::SortPairs(NULL,temp_storage_bytes_,input_ids,input_ids,
+                                        d_ssd_plus_buffer_,d_ssd_plus_buffer_,miss_cnt,
                                         0,sizeof(uint64_t)*8,stream);
 
-        // print<<<1,1>>>(D_ssd_plus_buffer,buffer_cnt);
-        // cudaCheckError();
-        split_flag<<<grid_size,block_size,0,stream>>>(D_split_flag,D_ssd_plus_buffer,miss_cnt,merge_lenth);
-        // cudaDeviceSynchronize();
-        // cudaCheckError();
-        merge_kernel<<<grid_size,block_size,0,stream>>>(D_ssd_plus_buffer,D_ret,D_ret_ssd,D_split_flag,
-                                                miss_cnt,ssd_start_addr,gpu_start_addr,merge_lenth,typesize);
-        // cudaCheckError();
-        // cudaDeviceSynchronize();
-        // print_Dret_ssd<<<1,1>>>(D_ret_ssd,miss_cnt,ssd_start_addr);
-        // cudaDeviceSynchronize();
+        cub::DeviceRadixSort::SortPairs(d_temp_storage_,temp_storage_bytes_,input_ids,input_ids,
+                                        d_ssd_plus_buffer_,d_ssd_plus_buffer_,miss_cnt,
+                                        0,sizeof(uint64_t)*8,stream);
+
+        split_flag<<<grid_size,block_size,0,stream>>>(d_split_flag_,d_ssd_plus_buffer_,miss_cnt,merge_lenth_);
+
+        merge_kernel<<<grid_size,block_size,0,stream>>>(d_ssd_plus_buffer_,d_ret_,d_ret_ssd_,d_split_flag_,
+                                                miss_cnt,dst_float_buffer,merge_lenth_,ssd_block_size);
             
-        cub::DeviceRadixSort::SortPairs(NULL, temp_storage_bytes, D_ret_ssd, D_ret_ssd, 
-                                        D_ret, D_ret, miss_cnt,
+        cub::DeviceRadixSort::SortPairs(NULL, temp_storage_bytes_, d_ret_ssd_, d_ret_ssd_, 
+                                        d_ret_, d_ret_, miss_cnt,
                                         0,sizeof(uint64_t)*8,stream);
-        // printf("temp_storage_bytes:%d\n",temp_storage_bytes);
-        cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, D_ret_ssd, D_ret_ssd, 
-                                        D_ret, D_ret, miss_cnt,
+        // printf("temp_storage_bytes_:%d\n",temp_storage_bytes_);
+        cub::DeviceRadixSort::SortPairs(d_temp_storage_, temp_storage_bytes_, d_ret_ssd_, d_ret_ssd_, 
+                                        d_ret_, d_ret_, miss_cnt,
                                         0,sizeof(uint64_t)*8,stream);
-        // cudaDeviceSynchronize();
-        
-        // cudaCheckError();
-        //////////////test{
-        // printf("buffer_cnt:%lu\n",buffer_cnt);
-        // printf("\n\n\n\nafter sorted\n\n\n\n");
-        // cout<<my_ULLONG_MAX<<endl;
-        // printf("%lu\n",my_ULLONG_MAX);
-        
-        ////////////}
-       
-        cudaEventRecord(stop,0);
-        cudaEventSynchronize(stop);
-        float elapsedTime;
-        cudaEventElapsedTime(&elapsedTime,start,stop);
-        printf("GPU_part time:%f ms\n",elapsedTime);
         
         cout<<"miss_cnt:"<<miss_cnt<<endl;
-        // print_Dret_ssd<<<1,1,0,stream>>>(D_ret_ssd,miss_cnt,ssd_start_addr,typesize);
-        // print_Dret<<<1,1,0,stream>>>(D_ret,miss_cnt,ssd_start_addr,gpu_start_addr,typesize);
-        cudaDeviceSynchronize();
-        return D_ret;
-        //the following is for debug
-        // IOReq *H_ret=(IOReq *)malloc(sizeof(IOReq)*miss_cnt);
-        // cudaMemcpy(H_ret,D_ret,sizeof(IOReq)*miss_cnt,cudaMemcpyDeviceToHost);
-        // return H_ret;
+        return d_ret_;
     }
 
-    
+    __host__
+    IOReq* no_merge(int32_t* cache_index, int32_t* input_ids, int32_t& input_num, float* dst_float_buffer, cudaStream_t stream){
+
+        no_merge_kernel<<<grid_size,block_size,0,stream>>>(d_ret_,cache_index,input_ids,input_num,
+                                                            dst_float_buffer,ssd_block_size);
+        return d_ret_;
+    }
 
 };
 
 __global__
-void get_miss(cache_id *D_ssd_plus_buffer,uint32_t *D_cache_miss,uint64_t *D_ids,uint64_t D_buffer_cnt){
+void get_miss(cache_id *d_ssd_plus_buffer_,int32_t *cache_index,int32_t *input_ids,uint64_t input_num){
     int thread_id=blockIdx.x*blockDim.x+threadIdx.x;
-    for(int i=thread_id;i<D_buffer_cnt;i+=blockDim.x*gridDim.x){
-        // printf("D_cache_miss[%d]=%d D_ids[%d]=%lu\n",i,D_cache_miss[i],i,D_ids[i]);
+    for(int i=thread_id;i<input_num;i+=blockDim.x*gridDim.x){
+        // printf("cache_index[%d]=%d input_ids[%d]=%lu\n",i,cache_index[i],i,input_ids[i]);
         cache_id tmp(my_ULLONG_MAX,my_ULLONG_MAX);
-        if(D_cache_miss[i]==1){
-            tmp.ssd_id=D_ids[i];
+        if(cache_index[i]==1){
+            tmp.ssd_id=input_ids[i];
             tmp.buffer_id=i;
-            D_ssd_plus_buffer[i]=tmp;
+            d_ssd_plus_buffer_[i]=tmp;
         }
         else{
-            D_ssd_plus_buffer[i]=tmp;
-            D_ids[i]=my_ULLONG_MAX;
+            d_ssd_plus_buffer_[i]=tmp;
+            input_ids[i]=my_ULLONG_MAX;
         }
     }
     return;
 }
 
 __global__
-void merge_kernel(cache_id *D_ssd_plus_buffer,IOReq *D_ret,uint64_t *D_ret_ssd,uint64_t* D_split_flag,uint64_t lenth,
-                    void *ssd_start_addr,void *gpu_start_addr,uint64_t merge_lenth,uint64_t typesize){
+void merge_kernel(cache_id *d_ssd_plus_buffer_,IOReq *d_ret,uint64_t *d_ret_ssd,uint64_t* d_split_flag_,uint64_t lenth,
+                    void *dst_float_buffer,uint64_t merge_lenth,uint64_t ssd_block_size){
     uint64_t thread_id=blockIdx.x*blockDim.x+threadIdx.x;
     for(uint64_t i=thread_id;i<lenth;i+=blockDim.x*gridDim.x){
-        // printf("D_ssd_plus_buffer[%lu].ssd_id=%lu\n",i,D_ssd_plus_buffer[i].ssd_id);
-        if(D_split_flag[i]==1){
-            // printf("D_ssd_plus_buffer[%lu].ssd_id=%lu\n",i,D_ssd_plus_buffer[i].ssd_id);
-            uint64_t base_id=D_ssd_plus_buffer[i].ssd_id/merge_lenth*merge_lenth;
-            IOReq req((uint64_t)ssd_start_addr+typesize*base_id,merge_lenth);
-            D_ret_ssd[i]=(uint64_t)ssd_start_addr+typesize*base_id;
+        // printf("d_ssd_plus_buffer_[%lu].ssd_id=%lu\n",i,d_ssd_plus_buffer_[i].ssd_id);
+        if(d_split_flag_[i]==1){
+            // printf("d_ssd_plus_buffer_[%lu].ssd_id=%lu\n",i,d_ssd_plus_buffer_[i].ssd_id);
+            uint64_t base_id=d_ssd_plus_buffer_[i].ssd_id/merge_lenth*merge_lenth;
+            IOReq req(base_id,merge_lenth);
+            d_ret_ssd[i]=base_id;
             uint64_t start=i+1;
-            req.dest_addr[D_ssd_plus_buffer[i].ssd_id-base_id]=(uint64_t)gpu_start_addr+typesize*D_ssd_plus_buffer[i].buffer_id;
-            while(D_ssd_plus_buffer[start].ssd_id!=my_ULLONG_MAX&&D_split_flag[start]==0){
-                req.dest_addr[D_ssd_plus_buffer[start].ssd_id-base_id]=(uint64_t)gpu_start_addr+typesize*D_ssd_plus_buffer[start].buffer_id;
+            req.dest_addr[d_ssd_plus_buffer_[i].ssd_id-base_id]=(uint64_t)dst_float_buffer+ssd_block_size*d_ssd_plus_buffer_[i].buffer_id;
+            while(d_ssd_plus_buffer_[start].ssd_id!=my_ULLONG_MAX&&d_split_flag_[start]==0){
+                req.dest_addr[d_ssd_plus_buffer_[start].ssd_id-base_id]=(uint64_t)dst_float_buffer+ssd_block_size*d_ssd_plus_buffer_[start].buffer_id;
                 start++;
             }
-            D_ret[i]=req;
-            // printf("cache:%lu\n",((uint64_t)D_ret[i].ssd_addr-(uint64_t)ssd_start_addr)/typesize);
-            // printf("gpu0:%lu\n",((uint64_t)D_ret[i].gpu_addr[0]-(uint64_t)gpu_start_addr)/typesize);
-            // printf("gpu1:%lu\n",((uint64_t)D_ret[i].gpu_addr[1]-(uint64_t)gpu_start_addr)/typesize);
-            // printf("gpu2:%lu\n",((uint64_t)D_ret[i].gpu_addr[2]-(uint64_t)gpu_start_addr)/typesize);
-            // printf("gpu3:%lu\n",((uint64_t)D_ret[i].gpu_addr[3]-(uint64_t)gpu_start_addr)/typesize);
-            // printf("gpu4:%lu\n",((uint64_t)D_ret[i].gpu_addr[4]-(uint64_t)gpu_start_addr)/typesize);
-            // printf("gpu5:%lu\n",((uint64_t)D_ret[i].gpu_addr[5]-(uint64_t)gpu_start_addr)/typesize);
-            // printf("gpu6:%lu\n",((uint64_t)D_ret[i].gpu_addr[6]-(uint64_t)gpu_start_addr)/typesize);
-            // printf("gpu7:%lu\n\n",((uint64_t)D_ret[i].gpu_addr[7]-(uint64_t)gpu_start_addr)/typesize);
-            
+            d_ret[i]=req;
         }else{
             IOReq req(my_ULLONG_MAX,merge_lenth);
-            D_ret_ssd[i]=my_ULLONG_MAX;
-            D_ret[i]=req;
+            d_ret_ssd[i]=my_ULLONG_MAX;
+            d_ret[i]=req;
         }
         
     }
 }
 
+
 __global__
-void split_flag(uint64_t *D_split_flag,cache_id *D_ssd_plus_buffer,uint64_t lenth,uint64_t merge_lenth){
-    uint64_t thread_id=blockIdx.x*blockDim.x+threadIdx.x;
-    if(thread_id==0){
-        D_split_flag[0]=1;
-        thread_id+=blockDim.x*gridDim.x;
-    }
-    for(uint64_t i=thread_id;i<lenth;i+=blockDim.x*gridDim.x){
-        if(D_ssd_plus_buffer[i].ssd_id/merge_lenth==D_ssd_plus_buffer[i-1].ssd_id/merge_lenth){
-            D_split_flag[i]=0;
-        }
-        else{
-            D_split_flag[i]=1;
-        }
-        // printf("D_ssds_plus_buffer[%lu].ssd_id=%lu  D_split_flag[%lu]=%lu\n ",i,D_ssd_plus_buffer[i].ssd_id,i,D_split_flag[i]);
+void no_merge_kernel(IOReq *d_ret,int32_t *cache_index,int32_t *input_ids,uint64_t input_num,
+                    void *dst_float_buffer,uint64_t ssd_block_size){
+    uint64_t thread_id=blockIdx.x*blockDim.x+threadIdx.x;              
+    for(uint64_t i=thread_id;i<input_num;i+=blockDim.x*gridDim.x){
+        int32_t cache_idx = cache_index[i];
+            d_ret[i].start_lb=input_ids[i];
+            d_ret[i].dest_addr[0]=(uint64_t)dst_float_buffer+ssd_block_size*i;
+            d_ret[i].num_items=1;
+            // if(thread_id == 0){
+            //     printf("d_ret[%lu].start_lb=%lu, %d, %lu\n",i,d_ret[i].start_lb, cache_index[i], d_ret[i].dest_addr[0]);
+            // }
+        // if(cache_index[i] == CACHEMISS_FLAG){
+        //     d_ret[i].start_lb=input_ids[i];
+        //     d_ret[i].dest_addr[0]=(uint64_t)dst_float_buffer+ssd_block_size*i;
+        // }else{
+        //     d_ret[i].start_lb=my_ULLONG_MAX;
+        //     d_ret[i].dest_addr[0]=my_ULLONG_MAX;
+        //     printf("d_ret[%lu].start_lb=%lu, %d\n",i,d_ret[i].start_lb, cache_index[i]);
+        // }
+
     }
 }
 
-
-
-
+__global__
+void split_flag(uint64_t *d_split_flag_,cache_id *d_ssd_plus_buffer_,uint64_t lenth,uint64_t merge_lenth){
+    uint64_t thread_id=blockIdx.x*blockDim.x+threadIdx.x;
+    if(thread_id==0){
+        d_split_flag_[0]=1;
+        thread_id+=blockDim.x*gridDim.x;
+    }
+    for(uint64_t i=thread_id;i<lenth;i+=blockDim.x*gridDim.x){
+        if(d_ssd_plus_buffer_[i].ssd_id/merge_lenth==d_ssd_plus_buffer_[i-1].ssd_id/merge_lenth){
+            d_split_flag_[i]=0;
+        }
+        else{
+            d_split_flag_[i]=1;
+        }
+        // printf("D_ssds_plus_buffer[%lu].ssd_id=%lu  d_split_flag_[%lu]=%lu\n ",i,d_ssd_plus_buffer_[i].ssd_id,i,d_split_flag_[i]);
+    }
+}
 

@@ -1,6 +1,6 @@
 #pragma once
 #include "ssdqp.cuh"
-#include "common.cuh"
+#include "system_config.cuh"
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -12,6 +12,20 @@
 #include "ioctl.h"
 #include <sys/ioctl.h>
 #include <assert.h>
+#include <iostream>
+
+// Macro for checking cuda errors following a cuda launch or api call
+#define cudaCheckError()                                       \
+  {                                                            \
+    cudaError_t e = cudaGetLastError();                        \
+    if (e != cudaSuccess) {                                    \
+      printf("Cuda failure %s:%d: '%s'\n", __FILE__, __LINE__, \
+             cudaGetErrorString(e));                           \
+      exit(EXIT_FAILURE);                                      \
+    }                                                          \
+  }
+
+
 
 typedef uint64_t app_addr_t;
 struct IOReq
@@ -42,9 +56,9 @@ struct IOReq
     }
 };
 
-__device__ int ssd_num_reqs[MAX_SSDS_SUPPORTED], ssd_num_reqs_prefix_sum[MAX_SSDS_SUPPORTED];
 
-__device__ int req_id_to_ssd_id(int req_id, int num_ssds)
+
+__device__ int req_id_to_ssd_id(int req_id, int num_ssds, int* ssd_num_reqs_prefix_sum)
 {
     int ssd_id = 0;
     for (; ssd_id < num_ssds; ssd_id++)
@@ -53,10 +67,10 @@ __device__ int req_id_to_ssd_id(int req_id, int num_ssds)
     return ssd_id;
 }
 
-__global__ static void submit_io_req_kernel(IOReq *reqs, int num_reqs, int num_ssds, int num_queues_per_ssd, SSDQueuePair *ssdqp, uint64_t *prp1, uint64_t **IO_buf_base, uint64_t *prp2)
+__global__ static void submit_io_req_kernel(IOReq *reqs, int num_reqs, int num_ssds, int num_queues_per_ssd, SSDQueuePair *ssdqp, uint64_t *prp1, uint64_t **IO_buf_base, uint64_t *prp2, int* ssd_num_reqs_prefix_sum)
 {
     int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
-    int ssd_id = req_id_to_ssd_id(thread_id, num_ssds);
+    int ssd_id = req_id_to_ssd_id(thread_id, num_ssds, ssd_num_reqs_prefix_sum);
     if (ssd_id >= num_ssds)
         return;
     int req_offset = thread_id - (ssd_id == 0 ? 0 : ssd_num_reqs_prefix_sum[ssd_id - 1]);
@@ -87,10 +101,10 @@ __global__ static void submit_io_req_kernel(IOReq *reqs, int num_reqs, int num_s
     );
 }
 
-__global__ static void ring_sq_doorbell_kernel(int num_ssds, int num_queues_per_ssd, SSDQueuePair *ssdqp)
+__global__ static void ring_sq_doorbell_kernel(int num_ssds, int num_queues_per_ssd, SSDQueuePair *ssdqp, int* ssd_num_reqs, int* ssd_num_reqs_prefix_sum)
 {
     int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
-    int ssd_id = req_id_to_ssd_id(thread_id, num_ssds);
+    int ssd_id = req_id_to_ssd_id(thread_id, num_ssds, ssd_num_reqs_prefix_sum);
     if (ssd_id >= num_ssds)
         return;
     int req_offset = thread_id - (ssd_id == 0 ? 0 : ssd_num_reqs_prefix_sum[ssd_id - 1]);
@@ -112,10 +126,10 @@ __global__ static void ring_sq_doorbell_kernel(int num_ssds, int num_queues_per_
 }
 
 /*
-__global__ static void poll_io_req_kernel(IOReq *reqs, int num_reqs, int num_ssds, int num_queues_per_ssd, SSDQueuePair *ssdqp, uint64_t *prp1, uint64_t **IO_buf_base, uint64_t *prp2)
+__global__ static void poll_io_req_kernel(IOReq *reqs, int num_reqs, int num_ssds, int num_queues_per_ssd, SSDQueuePair *ssdqp, uint64_t *prp1, uint64_t **IO_buf_base, uint64_t *prp2, int* ssd_num_reqs_prefix_sum)
 {
     int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
-    int ssd_id = req_id_to_ssd_id(thread_id, num_ssds);
+    int ssd_id = req_id_to_ssd_id(thread_id, num_ssds, ssd_num_reqs_prefix_sum);
     if (ssd_id >= num_ssds)
         return;
     int req_offset = thread_id - (ssd_id == 0 ? 0 : ssd_num_reqs_prefix_sum[ssd_id - 1]);
@@ -138,7 +152,7 @@ __global__ static void poll_io_req_kernel(IOReq *reqs, int num_reqs, int num_ssd
 }
 */
 
-__global__ static void copy_io_req_kernel(IOReq *reqs, int num_reqs, int num_ssds, int num_queues_per_ssd, SSDQueuePair *ssdqp, uint64_t *prp1, uint64_t **IO_buf_base, uint64_t *prp2)
+__global__ static void copy_io_req_kernel(IOReq *reqs, int num_reqs, int num_ssds, int num_queues_per_ssd, SSDQueuePair *ssdqp, uint64_t *prp1, uint64_t **IO_buf_base, uint64_t *prp2, int* ssd_num_reqs_prefix_sum)
 {
     int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
     int warp_id = thread_id / WARP_SIZE;
@@ -146,7 +160,7 @@ __global__ static void copy_io_req_kernel(IOReq *reqs, int num_reqs, int num_ssd
     int num_warps = blockDim.x * gridDim.x / WARP_SIZE;
     for (int i = warp_id; i < num_reqs; i += num_warps)
     {
-        int ssd_id = req_id_to_ssd_id(i, num_ssds);
+        int ssd_id = req_id_to_ssd_id(i, num_ssds, ssd_num_reqs_prefix_sum);
         int req_offset = i - (ssd_id == 0 ? 0 : ssd_num_reqs_prefix_sum[ssd_id - 1]);
         int queue_id = req_offset / (QUEUE_DEPTH - 1);
         int global_queue_id = ssd_id * num_queues_per_ssd + queue_id;
@@ -186,10 +200,10 @@ __global__ static void copy_io_req_kernel(IOReq *reqs, int num_reqs, int num_ssd
     }
 }
 
-__global__ static void ring_cq_doorbell_kernel(int num_ssds, int num_queues_per_ssd, SSDQueuePair *ssdqp)
+__global__ static void ring_cq_doorbell_kernel(int num_ssds, int num_queues_per_ssd, SSDQueuePair *ssdqp, int* ssd_num_reqs, int* ssd_num_reqs_prefix_sum)
 {
     int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
-    int ssd_id = req_id_to_ssd_id(thread_id, num_ssds);
+    int ssd_id = req_id_to_ssd_id(thread_id, num_ssds, ssd_num_reqs_prefix_sum);
     if (ssd_id >= num_ssds)
         return;
     int req_offset = thread_id - (ssd_id == 0 ? 0 : ssd_num_reqs_prefix_sum[ssd_id - 1]);
@@ -223,23 +237,30 @@ __global__ static void rw_data_kernel(uint32_t opcode, int ssd_id, uint64_t star
     }
 }
 
-__global__ static void preprocess_io_req_1(IOReq *reqs, int num_reqs, int num_ssds, int num_queues_per_ssd)
+__global__ static void preprocess_io_req_1(IOReq *reqs, int num_reqs, int num_ssds, int num_queues_per_ssd, int* ssd_num_reqs)
 {
     int tid = threadIdx.x + blockIdx.x * blockDim.x;
     int num_threads = blockDim.x * gridDim.x;
     for (int i = tid; i < num_reqs; i += num_threads)
     {
         int ssd_id = reqs[i].start_lb / NUM_LBS_PER_SSD;
-        assert(ssd_id < num_ssds);
-        atomicAdd(&ssd_num_reqs[ssd_id], 1);
+        // assert(ssd_id < num_ssds);
+        if(ssd_id < num_ssds && ssd_id >= 0){
+            atomicAdd(&ssd_num_reqs[ssd_id], 1);
+        }else{
+            printf("ssd_id: %d\n", ssd_id);
+        }
     }
 }
 
-__global__ static void preprocess_io_req_2(IOReq *reqs, int num_reqs, int num_ssds, int num_queues_per_ssd)
+__global__ static void preprocess_io_req_2(IOReq *reqs, int num_reqs, int num_ssds, int num_queues_per_ssd, int* ssd_num_reqs, int* ssd_num_reqs_prefix_sum)
 {
     for (int i = 0; i < num_ssds; i++)
     {
-        assert(ssd_num_reqs[i] <= num_queues_per_ssd * (QUEUE_DEPTH - 1));
+        // assert(ssd_num_reqs[i] <= num_queues_per_ssd * (QUEUE_DEPTH - 1));
+        if(ssd_num_reqs[i] > num_queues_per_ssd * (QUEUE_DEPTH - 1)){
+            printf("ssd_num_reqs[%d]: %d\n", i, ssd_num_reqs[i]);
+        }
         ssd_num_reqs_prefix_sum[i] = ssd_num_reqs[i];
         if (i > 0)
             ssd_num_reqs_prefix_sum[i] += ssd_num_reqs_prefix_sum[i - 1];
@@ -247,7 +268,7 @@ __global__ static void preprocess_io_req_2(IOReq *reqs, int num_reqs, int num_ss
 }
 
 __device__ int req_ids[MAX_SSDS_SUPPORTED];
-__global__ static void distribute_io_req_1(IOReq *reqs, int num_reqs, int num_ssds, int num_queues_per_ssd, IOReq *distributed_reqs)
+__global__ static void distribute_io_req_1(IOReq *reqs, int num_reqs, int num_ssds, int num_queues_per_ssd, IOReq *distributed_reqs, int* ssd_num_reqs_prefix_sum)
 {
     for (int i = 0; i < num_ssds; i++)
         req_ids[i] = i ? ssd_num_reqs_prefix_sum[i - 1] : 0;
@@ -260,109 +281,144 @@ __global__ static void distribute_io_req_2(IOReq *reqs, int num_reqs, int num_ss
     for (int i = tid; i < num_reqs; i += num_threads)
     {
         int ssd_id = reqs[i].start_lb / NUM_LBS_PER_SSD;
-        assert(ssd_id < num_ssds);
-        int req_id = atomicAdd(&req_ids[ssd_id], 1);
-        distributed_reqs[req_id] = reqs[i];
-        distributed_reqs[req_id].start_lb %= NUM_LBS_PER_SSD;
+        // assert(ssd_id < num_ssds);
+        if(ssd_id < num_ssds && ssd_id >= 0){
+            int req_id = atomicAdd(&req_ids[ssd_id], 1);
+            distributed_reqs[req_id] = reqs[i];
+            distributed_reqs[req_id].start_lb %= NUM_LBS_PER_SSD;
+        }
     }
 }
 
-__global__ static void distribute_io_req_3(IOReq *reqs, int num_reqs, int num_ssds, int num_queues_per_ssd, IOReq *distributed_reqs)
+__global__ static void distribute_io_req_3(IOReq *reqs, int num_reqs, int num_ssds, int num_queues_per_ssd, IOReq *distributed_reqs, int* ssd_num_reqs_prefix_sum)
 {
-    for (int i = 0; i < num_ssds; i++)
-        assert(req_ids[i] == ssd_num_reqs_prefix_sum[i]);
+    for (int i = 0; i < num_ssds; i++){
+        if(req_ids[i] != ssd_num_reqs_prefix_sum[i]){
+            printf("req id %d %d\n", req_ids[i], ssd_num_reqs_prefix_sum[i]);
+        }
+        // assert(req_ids[i] == ssd_num_reqs_prefix_sum[i]);
+    }
+
 }
 
 class IOStack
 {
 public:
-    IOStack(int num_ssds, int num_queues_per_ssd) : num_ssds(num_ssds), num_queues_per_ssd(num_queues_per_ssd)
+    IOStack(int num_ssds, int num_queues_per_ssd) : num_ssds_(num_ssds), num_queues_per_ssd_(num_queues_per_ssd)
     {
         // alloc device variables
-        CHECK(cudaMalloc(&d_ssdqp, num_ssds * num_queues_per_ssd * sizeof(SSDQueuePair)));
-        CHECK(cudaMalloc(&d_prp1, num_ssds * sizeof(uint64_t)));
-        int prp_size_per_ssd = PRP_SIZE * QUEUE_DEPTH * num_queues_per_ssd / HOST_PGSZ * HOST_PGSZ + HOST_PGSZ;
-        CHECK(cudaMalloc(&d_prp2, num_ssds * prp_size_per_ssd / HOST_PGSZ * sizeof(uint64_t)));
-        CHECK(cudaMalloc(&d_IO_buf_base, num_ssds * sizeof(uint64_t *)));
-        h_IO_buf_base = (uint64_t **)malloc(sizeof(uint64_t *) * num_ssds);
+        CHECK(cudaMalloc(&d_ssdqp_, num_ssds_ * num_queues_per_ssd_ * sizeof(SSDQueuePair)));
+        CHECK(cudaMalloc(&d_prp1_, num_ssds_ * sizeof(uint64_t)));
+        int prp_size_per_ssd = PRP_SIZE * QUEUE_DEPTH * num_queues_per_ssd_ / HOST_PGSZ * HOST_PGSZ + HOST_PGSZ;
+        CHECK(cudaMalloc(&d_prp2_, num_ssds_ * prp_size_per_ssd / HOST_PGSZ * sizeof(uint64_t)));
+        CHECK(cudaMalloc(&d_IO_buf_base_, num_ssds_ * sizeof(uint64_t *)));
+        h_IO_buf_base_ = (uint64_t **)malloc(sizeof(uint64_t *) * num_ssds_);
+        CHECK(cudaMalloc(&distributed_reqs_, 4000000 * sizeof(IOReq)));
+        CHECK(cudaMalloc(&ssd_num_reqs_, MAX_SSDS_SUPPORTED * sizeof(int)));
+        CHECK(cudaMalloc(&ssd_num_reqs_prefix_sum_, MAX_SSDS_SUPPORTED * sizeof(int)));
 
         // init ssds
-        for (int i = 0; i < num_ssds; i++)
+        for (int i = 0; i < num_ssds_; i++)
             init_ssd(i);
     }
 
     ~IOStack()
     {
-        CHECK(cudaFree(d_ssdqp));
-        CHECK(cudaFree(d_prp1));
-        CHECK(cudaFree(d_IO_buf_base));
-        munmap(reg_ptr, REG_SIZE);
-        free(h_admin_queue);
-        // CHECK(cudaFree(d_io_queue));
-        // CHECK(cudaFree(d_io_buf));
-        free(h_IO_buf_base);
+        CHECK(cudaFree(d_ssdqp_));
+        CHECK(cudaFree(d_prp1_));
+        CHECK(cudaFree(d_IO_buf_base_));
+        munmap(reg_ptr_, REG_SIZE);
+        free(h_admin_queue_);
+        // CHECK(cudaFree(d_io_queue_));
+        // CHECK(cudaFree(d_io_buf_));
+        free(h_IO_buf_base_);
     }
 
     void submit_io_req(IOReq *reqs, int num_reqs, cudaStream_t stream)
     {
-        cudaEvent_t start, stop;
-        CHECK(cudaEventCreate(&start));
-        CHECK(cudaEventCreate(&stop));
-        CHECK(cudaEventRecord(start));
-        // CHECK(cudaMemset(ssd_num_reqs, 0, sizeof(int) * num_ssds));
-        preprocess_io_req_1<<<100, NUM_THREADS_PER_BLOCK, 0, stream>>>(reqs, num_reqs, num_ssds, num_queues_per_ssd);
-        preprocess_io_req_2<<<1, 1, 0, stream>>>(reqs, num_reqs, num_ssds, num_queues_per_ssd);
-        CHECK(cudaMalloc(&distributed_reqs, num_reqs * sizeof(IOReq)));
-        distribute_io_req_1<<<1, 1, 0, stream>>>(reqs, num_reqs, num_ssds, num_queues_per_ssd, distributed_reqs);
-        distribute_io_req_2<<<100, NUM_THREADS_PER_BLOCK, 0, stream>>>(reqs, num_reqs, num_ssds, num_queues_per_ssd, distributed_reqs);
-        distribute_io_req_3<<<1, 1, 0, stream>>>(reqs, num_reqs, num_ssds, num_queues_per_ssd, distributed_reqs);
-        CHECK(cudaEventRecord(stop));
-        CHECK(cudaEventSynchronize(stop));
-        float ms;
-        CHECK(cudaEventElapsedTime(&ms, start, stop));
-        fprintf(stderr, "distribute takes %f ms\n", ms);
+        // cudaEvent_t start, stop;
+        // CHECK(cudaEventCreate(&start));
+        // CHECK(cudaEventCreate(&stop));
+        // CHECK(cudaEventRecord(start));
+        // CHECK(cudaMemset(ssd_num_reqs, 0, sizeof(int) * num_ssds_));
+        // std::cout<<"num_reqs: "<<num_reqs<<std::endl;
+        cudaMemsetAsync(ssd_num_reqs_, 0, sizeof(int) * num_ssds_, stream);
+        cudaCheckError();
+
+        cudaMemsetAsync(ssd_num_reqs_prefix_sum_, 0, sizeof(int) * num_ssds_, stream);
+        cudaCheckError();
+
+        preprocess_io_req_1<<<100, NUM_THREADS_PER_BLOCK, 0, stream>>>(reqs, num_reqs, num_ssds_, num_queues_per_ssd_, ssd_num_reqs_);
+        cudaCheckError();
+        preprocess_io_req_2<<<1, 1, 0, stream>>>(reqs, num_reqs, num_ssds_, num_queues_per_ssd_, ssd_num_reqs_, ssd_num_reqs_prefix_sum_);
+        cudaCheckError();
+
+        distribute_io_req_1<<<1, 1, 0, stream>>>(reqs, num_reqs, num_ssds_, num_queues_per_ssd_, distributed_reqs_, ssd_num_reqs_prefix_sum_);
+        cudaCheckError();
+
+        distribute_io_req_2<<<100, NUM_THREADS_PER_BLOCK, 0, stream>>>(reqs, num_reqs, num_ssds_, num_queues_per_ssd_, distributed_reqs_);
+        cudaCheckError();
+
+        distribute_io_req_3<<<1, 1, 0, stream>>>(reqs, num_reqs, num_ssds_, num_queues_per_ssd_, distributed_reqs_, ssd_num_reqs_prefix_sum_);
+        cudaCheckError();
+
+        // // CHECK(cudaEventRecord(stop));
+        // // CHECK(cudaEventSynchronize(stop));
+        // // float ms;
+        // // CHECK(cudaEventElapsedTime(&ms, start, stop));
+        // // fprintf(stderr, "distribute takes %f ms\n", ms);
         int num_blocks = (num_reqs + NUM_THREADS_PER_BLOCK - 1) / NUM_THREADS_PER_BLOCK;
-        submit_io_req_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(distributed_reqs, num_reqs, num_ssds, num_queues_per_ssd, d_ssdqp, d_prp1, d_IO_buf_base, d_prp2);
-        ring_sq_doorbell_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(num_ssds, num_queues_per_ssd, d_ssdqp);
+        submit_io_req_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(distributed_reqs_, num_reqs, num_ssds_, num_queues_per_ssd_, d_ssdqp_, d_prp1_, d_IO_buf_base_, d_prp2_, ssd_num_reqs_prefix_sum_);
+        cudaCheckError();
+
+        ring_sq_doorbell_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(num_ssds_, num_queues_per_ssd_, d_ssdqp_, ssd_num_reqs_, ssd_num_reqs_prefix_sum_);
+        cudaCheckError();
+
         // CHECK(cudaDeviceSynchronize());
-        // poll_io_req_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(distributed_reqs, num_reqs, num_ssds, num_queues_per_ssd, d_ssdqp, d_prp1, d_IO_buf_base, d_prp2);
+        // poll_io_req_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(distributed_reqs_, num_reqs, num_ssds_, num_queues_per_ssd_, d_ssdqp_, d_prp1_, d_IO_buf_base_, d_prp2_);
         // CHECK(cudaDeviceSynchronize());
-        copy_io_req_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(distributed_reqs, num_reqs, num_ssds, num_queues_per_ssd, d_ssdqp, d_prp1, d_IO_buf_base, d_prp2);
-        ring_cq_doorbell_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(num_ssds, num_queues_per_ssd, d_ssdqp);
-        CHECK(cudaFree(distributed_reqs));
+        /////////////////////////////////potential risk!!!!!!!!!////////////////////////////////////////////////////
+        copy_io_req_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(distributed_reqs_, num_reqs, num_ssds_, num_queues_per_ssd_, d_ssdqp_, d_prp1_, d_IO_buf_base_, d_prp2_, ssd_num_reqs_prefix_sum_);
+        cudaCheckError();
+
+        ring_cq_doorbell_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(num_ssds_, num_queues_per_ssd_, d_ssdqp_, ssd_num_reqs_, ssd_num_reqs_prefix_sum_);
+        cudaCheckError();
+
     }
 
     void read_data(int ssd_id, uint64_t start_lb, uint64_t num_lb)
     {
-        rw_data_kernel<<<1, 1>>>(OPCODE_READ, ssd_id, start_lb, num_lb, num_queues_per_ssd, d_ssdqp, d_prp1, d_IO_buf_base, d_prp2);
+        rw_data_kernel<<<1, 1>>>(OPCODE_READ, ssd_id, start_lb, num_lb, num_queues_per_ssd_, d_ssdqp_, d_prp1_, d_IO_buf_base_, d_prp2_);
     }
 
     void write_data(int ssd_id, uint64_t start_lb, uint64_t num_lb)
     {
-        rw_data_kernel<<<1, 1>>>(OPCODE_WRITE, ssd_id, start_lb, num_lb, num_queues_per_ssd, d_ssdqp, d_prp1, d_IO_buf_base, d_prp2);
+        rw_data_kernel<<<1, 1>>>(OPCODE_WRITE, ssd_id, start_lb, num_lb, num_queues_per_ssd_, d_ssdqp_, d_prp1_, d_IO_buf_base_, d_prp2_);
     }
 
     uint64_t **get_d_io_buf_base()
     {
-        return d_IO_buf_base;
+        return d_IO_buf_base_;
     }
 
     uint64_t **get_h_io_buf_base()
     {
-        return h_IO_buf_base;
+        return h_IO_buf_base_;
     }
 
-    // private:
-    int num_ssds;
-    int num_queues_per_ssd;
-    SSDQueuePair *d_ssdqp;
-    uint64_t *d_prp1, *d_prp2;
-    uint64_t **d_IO_buf_base, **h_IO_buf_base;
-    void *reg_ptr;
-    void *h_admin_queue;
-    void *d_io_queue;
-    void *d_io_buf;
-    IOReq *distributed_reqs;
+    
+    int num_ssds_;
+    int num_queues_per_ssd_;
+    SSDQueuePair *d_ssdqp_;
+    uint64_t *d_prp1_, *d_prp2_;
+    uint64_t **d_IO_buf_base_, **h_IO_buf_base_;
+    void *reg_ptr_;
+    void *h_admin_queue_;
+    void *d_io_queue_;
+    void *d_io_buf_;
+    IOReq *distributed_reqs_;
+    int* ssd_num_reqs_; 
+    int* ssd_num_reqs_prefix_sum_;
 
     void init_ssd(int ssd_id)
     {
@@ -376,16 +432,16 @@ public:
             fprintf(stderr, "Failed to open: %s\n", strerror(errno));
             exit(1);
         }
-        reg_ptr = mmap(NULL, REG_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_LOCKED, fd, 0);
-        if (reg_ptr == MAP_FAILED)
+        reg_ptr_ = mmap(NULL, REG_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_LOCKED, fd, 0);
+        if (reg_ptr_ == MAP_FAILED)
         {
             fprintf(stderr, "Failed to mmap: %s\n", strerror(errno));
             exit(1);
         }
-        CHECK(cudaHostRegister(reg_ptr, REG_SIZE, cudaHostRegisterIoMemory));
+        CHECK(cudaHostRegister(reg_ptr_, REG_SIZE, cudaHostRegisterIoMemory));
 
         // reset controller
-        uint64_t h_reg_ptr = (uint64_t)reg_ptr;
+        uint64_t h_reg_ptr = (uint64_t)reg_ptr_;
         *(uint32_t *)(h_reg_ptr + REG_CC) &= ~REG_CC_EN;
         while (*(uint32_t volatile *)(h_reg_ptr + REG_CSTS) & REG_CSTS_RDY)
             ;
@@ -393,10 +449,10 @@ public:
 
         // set admin_qp queue attributes
         *(uint32_t *)(h_reg_ptr + REG_AQA) = ((ADMIN_QUEUE_DEPTH - 1) << 16) | (ADMIN_QUEUE_DEPTH - 1);
-        posix_memalign(&h_admin_queue, HOST_PGSZ, HOST_PGSZ * 2);
-        memset(h_admin_queue, 0, HOST_PGSZ * 2);
+        posix_memalign(&h_admin_queue_, HOST_PGSZ, HOST_PGSZ * 2);
+        memset(h_admin_queue_, 0, HOST_PGSZ * 2);
         nvm_ioctl_map req; // convert to physical address
-        req.vaddr_start = (uint64_t)h_admin_queue;
+        req.vaddr_start = (uint64_t)h_admin_queue_;
         req.n_pages = 2;
         req.ioaddrs = (uint64_t *)malloc(sizeof(uint64_t) * 2);
         int err = ioctl(fd, NVM_MAP_HOST_MEMORY, &req);
@@ -405,9 +461,9 @@ public:
             fprintf(stderr, "Failed to map admin_qp queue: %s\n", strerror(errno));
             exit(1);
         }
-        uint64_t asq = (uint64_t)h_admin_queue;
+        uint64_t asq = (uint64_t)h_admin_queue_;
         *(uint64_t *)(h_reg_ptr + REG_ASQ) = req.ioaddrs[0];
-        uint64_t acq = (uint64_t)h_admin_queue + HOST_PGSZ;
+        uint64_t acq = (uint64_t)h_admin_queue_ + HOST_PGSZ;
         *(uint64_t *)(h_reg_ptr + REG_ACQ) = req.ioaddrs[1];
         SSDQueuePair admin_qp((volatile uint32_t *)asq, (volatile uint32_t *)acq, BROADCAST_NSID, (uint32_t *)(h_reg_ptr + REG_SQTDBL), (uint32_t *)(h_reg_ptr + REG_CQHDBL), ADMIN_QUEUE_DEPTH);
         fprintf(stderr, "set admin_qp queue attributes done\n");
@@ -421,7 +477,7 @@ public:
         // set number of I/O queues
         uint32_t cid;
         admin_qp.submit(cid, OPCODE_SET_FEATURES, 0x0, 0x0, FID_NUM_QUEUES,
-                        ((num_queues_per_ssd - 1) << 16) | (num_queues_per_ssd - 1));
+                        ((num_queues_per_ssd_ - 1) << 16) | (num_queues_per_ssd_ - 1));
         uint32_t status;
         admin_qp.poll(status, cid);
         if (status != 0)
@@ -434,12 +490,12 @@ public:
         // create I/O queues
         int sq_size = QUEUE_DEPTH * SQ_ITEM_SIZE;
         assert(sq_size % HOST_PGSZ == 0);
-        uint64_t *phys = cudaMallocAlignedMapped(d_io_queue, sq_size * 2 * num_queues_per_ssd, fd); // 2 stands for SQ and CQ
-        CHECK(cudaMemset(d_io_queue, 0, sq_size * 2 * num_queues_per_ssd));
-        for (int i = 0; i < num_queues_per_ssd; i++)
+        uint64_t *phys = cudaMallocAlignedMapped(d_io_queue_, sq_size * 2 * num_queues_per_ssd_, fd); // 2 stands for SQ and CQ
+        CHECK(cudaMemset(d_io_queue_, 0, sq_size * 2 * num_queues_per_ssd_));
+        for (int i = 0; i < num_queues_per_ssd_; i++)
         {
-            uint64_t sq = (uint64_t)d_io_queue + sq_size * (2 * i);
-            uint64_t cq = (uint64_t)d_io_queue + sq_size * (2 * i + 1);
+            uint64_t sq = (uint64_t)d_io_queue_ + sq_size * (2 * i);
+            uint64_t cq = (uint64_t)d_io_queue_ + sq_size * (2 * i + 1);
             int qid = i + 1;
             int offset = sq_size * (2 * i + 1);
             uint64_t prp1 = phys[offset / DEVICE_PGSZ] + offset % DEVICE_PGSZ;
@@ -467,28 +523,28 @@ public:
             CHECK(cudaMalloc(&sq_entry_busy, QUEUE_DEPTH));
             CHECK(cudaMemset(sq_entry_busy, 0, QUEUE_DEPTH));
             SSDQueuePair current_qp((volatile uint32_t *)sq, (volatile uint32_t *)cq, 0x1, (uint32_t *)(h_reg_ptr + REG_SQTDBL + DBL_STRIDE * qid), (uint32_t *)(h_reg_ptr + REG_CQHDBL + DBL_STRIDE * qid), QUEUE_DEPTH, cmd_id_to_req_id, cmd_id_to_sq_pos, sq_entry_busy);
-            CHECK(cudaMemcpy(d_ssdqp + ssd_id * num_queues_per_ssd + i, &current_qp, sizeof(SSDQueuePair), cudaMemcpyHostToDevice));
+            CHECK(cudaMemcpy(d_ssdqp_ + ssd_id * num_queues_per_ssd_ + i, &current_qp, sizeof(SSDQueuePair), cudaMemcpyHostToDevice));
         }
         // free(phys);
         fprintf(stderr, "create I/O queues done!\n");
 
         // alloc IO buffer
-        phys = cudaMallocAlignedMapped(d_io_buf, (size_t)QUEUE_IOBUF_SIZE * num_queues_per_ssd, fd);
-        CHECK(cudaMemcpy(d_prp1 + ssd_id, phys, sizeof(uint64_t), cudaMemcpyHostToDevice));
-        CHECK(cudaMemcpy(d_IO_buf_base + ssd_id, &d_io_buf, sizeof(uint64_t), cudaMemcpyHostToDevice));
-        h_IO_buf_base[ssd_id] = (uint64_t *)d_io_buf;
-        // for (int i = 0; i < QUEUE_IOBUF_SIZE * num_queues_per_ssd / DEVICE_PGSZ; i++)
+        phys = cudaMallocAlignedMapped(d_io_buf_, (size_t)QUEUE_IOBUF_SIZE * num_queues_per_ssd_, fd);
+        CHECK(cudaMemcpy(d_prp1_ + ssd_id, phys, sizeof(uint64_t), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(d_IO_buf_base_ + ssd_id, &d_io_buf_, sizeof(uint64_t), cudaMemcpyHostToDevice));
+        h_IO_buf_base_[ssd_id] = (uint64_t *)d_io_buf_;
+        // for (int i = 0; i < QUEUE_IOBUF_SIZE * num_queues_per_ssd_ / DEVICE_PGSZ; i++)
         //     printf("%lx\n", phys[i]);
 
         // build PRP list
         assert(PRP_SIZE <= HOST_PGSZ);
-        int prp_size_per_ssd = PRP_SIZE * QUEUE_DEPTH * num_queues_per_ssd / HOST_PGSZ * HOST_PGSZ + HOST_PGSZ; // 1 table per ssd in host memory
+        int prp_size_per_ssd = PRP_SIZE * QUEUE_DEPTH * num_queues_per_ssd_ / HOST_PGSZ * HOST_PGSZ + HOST_PGSZ; // 1 table per ssd in host memory
         // printf("prp_size_per_ssd: %d\n", prp_size_per_ssd);
         void *tmp;
         posix_memalign(&tmp, HOST_PGSZ, prp_size_per_ssd);
         memset(tmp, 0, prp_size_per_ssd);
         uint64_t *prp = (uint64_t *)tmp;
-        for (int i = 0; i < QUEUE_DEPTH * num_queues_per_ssd; i++)
+        for (int i = 0; i < QUEUE_DEPTH * num_queues_per_ssd_; i++)
             for (int j = 1; j < NUM_PRP_ENTRIES; j++)
             {
                 int prp_idx = i * NUM_PRP_ENTRIES + j;
@@ -497,7 +553,7 @@ public:
             }
         // Fill in each PRP table
         // free(phys);
-        // for (int i = 0; i < QUEUE_DEPTH * num_queues_per_ssd * NUM_PRP_ENTRIES; i++)
+        // for (int i = 0; i < QUEUE_DEPTH * num_queues_per_ssd_ * NUM_PRP_ENTRIES; i++)
         //     printf("%lx\n", prp[i]);
         req.vaddr_start = (uint64_t)prp;
         req.n_pages = prp_size_per_ssd / HOST_PGSZ;
@@ -512,8 +568,8 @@ public:
         // for (int i = 0; i < req.n_pages; i++)
         //     printf("%lx ", req.ioaddrs[i]);
         // printf("\n");
-        CHECK(cudaMemcpy(d_prp2 + ssd_id * req.n_pages, req.ioaddrs, req.n_pages * sizeof(uint64_t), cudaMemcpyHostToDevice));
-        // d_prp2 is an array of physical pointer to PRP table
+        CHECK(cudaMemcpy(d_prp2_ + ssd_id * req.n_pages, req.ioaddrs, req.n_pages * sizeof(uint64_t), cudaMemcpyHostToDevice));
+        // d_prp2_ is an array of physical pointer to PRP table
     }
 
     uint64_t *cudaMallocAlignedMapped(void *&vaddr, size_t size, int fd)
