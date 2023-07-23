@@ -1,6 +1,6 @@
 #pragma once
 #include "ssdqp.cuh"
-#include "system_config.cuh"
+#include "common.cuh"
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -70,58 +70,66 @@ __device__ int req_id_to_ssd_id(int req_id, int num_ssds, int* ssd_num_reqs_pref
 __global__ static void submit_io_req_kernel(IOReq *reqs, int num_reqs, int num_ssds, int num_queues_per_ssd, SSDQueuePair *ssdqp, uint64_t *prp1, uint64_t **IO_buf_base, uint64_t *prp2, int* ssd_num_reqs_prefix_sum)
 {
     int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
-    int ssd_id = req_id_to_ssd_id(thread_id, num_ssds, ssd_num_reqs_prefix_sum);
-    if (ssd_id >= num_ssds)
-        return;
-    int req_offset = thread_id - (ssd_id == 0 ? 0 : ssd_num_reqs_prefix_sum[ssd_id - 1]);
-    int queue_id = req_offset / (QUEUE_DEPTH - 1);
-    assert(queue_id < num_queues_per_ssd);
-    int global_queue_id = ssd_id * num_queues_per_ssd + queue_id;
-    int id_in_queue = req_offset % (QUEUE_DEPTH - 1);
-    int queue_pos = (ssdqp[global_queue_id].sq_tail + id_in_queue) % QUEUE_DEPTH;
-
-    uint64_t io_addr = prp1[ssd_id] + queue_id * QUEUE_IOBUF_SIZE + queue_pos * MAX_IO_SIZE; // assume contiguous!
-    uint64_t io_addr2 = io_addr / HOST_PGSZ * HOST_PGSZ + HOST_PGSZ;
-    if (reqs[thread_id].num_items * ITEM_SIZE > HOST_PGSZ * 2)
+    int num_threads = blockDim.x * gridDim.x;
+    for (int i = thread_id; i < num_reqs; i += num_threads)
     {
-        int prp_size_per_ssd = PRP_SIZE * QUEUE_DEPTH * num_queues_per_ssd / HOST_PGSZ * HOST_PGSZ + HOST_PGSZ;
-        uint64_t offset = queue_id * PRP_SIZE * QUEUE_DEPTH + queue_pos * PRP_SIZE;
-        io_addr2 = prp2[ssd_id * prp_size_per_ssd / HOST_PGSZ + offset / HOST_PGSZ] + offset % HOST_PGSZ;
+        int ssd_id = req_id_to_ssd_id(i, num_ssds, ssd_num_reqs_prefix_sum);
+        if (ssd_id >= num_ssds)
+            break;
+        int req_offset = i - (ssd_id == 0 ? 0 : ssd_num_reqs_prefix_sum[ssd_id - 1]);
+        int queue_id = req_offset / (QUEUE_DEPTH - 1);
+        assert(queue_id < num_queues_per_ssd);
+        int global_queue_id = ssd_id * num_queues_per_ssd + queue_id;
+        int id_in_queue = req_offset % (QUEUE_DEPTH - 1);
+        int queue_pos = (ssdqp[global_queue_id].sq_tail + id_in_queue) % QUEUE_DEPTH;
+
+        uint64_t io_addr = prp1[ssd_id] + queue_id * QUEUE_IOBUF_SIZE + queue_pos * MAX_IO_SIZE; // assume contiguous!
+        uint64_t io_addr2 = io_addr / HOST_PGSZ * HOST_PGSZ + HOST_PGSZ;
+        if (reqs[i].num_items * ITEM_SIZE > HOST_PGSZ * 2)
+        {
+            int prp_size_per_ssd = PRP_SIZE * QUEUE_DEPTH * num_queues_per_ssd / HOST_PGSZ * HOST_PGSZ + HOST_PGSZ;
+            uint64_t offset = queue_id * PRP_SIZE * QUEUE_DEPTH + queue_pos * PRP_SIZE;
+            io_addr2 = prp2[ssd_id * prp_size_per_ssd / HOST_PGSZ + offset / HOST_PGSZ] + offset % HOST_PGSZ;
+        }
+        ssdqp[global_queue_id].fill_sq(
+            ssdqp[global_queue_id].cmd_id + id_in_queue,                   // command id
+            queue_pos,                                                     // position in SQ
+            OPCODE_READ,                                                   // opcode
+            io_addr,                                                       // prp1
+            io_addr2,                                                      // prp2
+            reqs[i].start_lb & 0xffffffff,                                 // start lb low
+            (reqs[i].start_lb >> 32) & 0xffffffff,                         // start lb high
+            RW_RETRY_MASK | (reqs[i].num_items * ITEM_SIZE / LB_SIZE - 1), // number of LBs
+            i                                                              // req id
+        );
     }
-    ssdqp[global_queue_id].fill_sq(
-        ssdqp[global_queue_id].cmd_id + id_in_queue,                           // command id
-        queue_pos,                                                             // position in SQ
-        OPCODE_READ,                                                           // opcode
-        io_addr,                                                               // prp1
-        io_addr2,                                                              // prp2
-        reqs[thread_id].start_lb & 0xffffffff,                                 // start lb low
-        (reqs[thread_id].start_lb >> 32) & 0xffffffff,                         // start lb high
-        RW_RETRY_MASK | (reqs[thread_id].num_items * ITEM_SIZE / LB_SIZE - 1), // number of LBs
-        thread_id                                                              // req id
-    );
 }
 
-__global__ static void ring_sq_doorbell_kernel(int num_ssds, int num_queues_per_ssd, SSDQueuePair *ssdqp, int* ssd_num_reqs, int* ssd_num_reqs_prefix_sum)
+__global__ static void ring_sq_doorbell_kernel(int num_ssds, int num_queues_per_ssd, SSDQueuePair *ssdqp, int *ssd_num_reqs, int *ssd_num_reqs_prefix_sum, int num_reqs)
 {
     int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
-    int ssd_id = req_id_to_ssd_id(thread_id, num_ssds, ssd_num_reqs_prefix_sum);
-    if (ssd_id >= num_ssds)
-        return;
-    int req_offset = thread_id - (ssd_id == 0 ? 0 : ssd_num_reqs_prefix_sum[ssd_id - 1]);
-    int queue_id = req_offset / (QUEUE_DEPTH - 1);
-    assert(queue_id < num_queues_per_ssd);
-    int global_queue_id = ssd_id * num_queues_per_ssd + queue_id;
-    int id_in_queue = req_offset % (QUEUE_DEPTH - 1);
-
-    if (id_in_queue == 0)
+    int num_threads = blockDim.x * gridDim.x;
+    for (int i = thread_id; i < num_reqs; i += num_threads)
     {
-        int cnt = ssd_num_reqs[ssd_id] - queue_id * (QUEUE_DEPTH - 1);
-        if (cnt > QUEUE_DEPTH - 1)
-            cnt = QUEUE_DEPTH - 1;
-        ssdqp[global_queue_id].cmd_id += cnt;
-        ssdqp[global_queue_id].sq_tail = (ssdqp[global_queue_id].sq_tail + cnt) % QUEUE_DEPTH;
-        // printf("thread %d ssd %d queue %d end req %d cnt %d\n", thread_id, ssd_id, queue_id, ssd_num_reqs_prefix_sum[ssd_id], cnt);
-        *ssdqp[global_queue_id].sqtdbl = ssdqp[global_queue_id].sq_tail;
+        int ssd_id = req_id_to_ssd_id(i, num_ssds, ssd_num_reqs_prefix_sum);
+        if (ssd_id >= num_ssds)
+            break;
+        int req_offset = i - (ssd_id == 0 ? 0 : ssd_num_reqs_prefix_sum[ssd_id - 1]);
+        int queue_id = req_offset / (QUEUE_DEPTH - 1);
+        assert(queue_id < num_queues_per_ssd);
+        int global_queue_id = ssd_id * num_queues_per_ssd + queue_id;
+        int id_in_queue = req_offset % (QUEUE_DEPTH - 1);
+
+        if (id_in_queue == 0)
+        {
+            int cnt = ssd_num_reqs[ssd_id] - queue_id * (QUEUE_DEPTH - 1);
+            if (cnt > QUEUE_DEPTH - 1)
+                cnt = QUEUE_DEPTH - 1;
+            ssdqp[global_queue_id].cmd_id += cnt;
+            ssdqp[global_queue_id].sq_tail = (ssdqp[global_queue_id].sq_tail + cnt) % QUEUE_DEPTH;
+            // printf("thread %d ssd %d queue %d end req %d cnt %d\n", thread_id, ssd_id, queue_id, ssd_num_reqs_prefix_sum[ssd_id], cnt);
+            *ssdqp[global_queue_id].sqtdbl = ssdqp[global_queue_id].sq_tail;
+        }
     }
 }
 
@@ -188,38 +196,33 @@ __global__ static void copy_io_req_kernel(IOReq *reqs, int num_reqs, int num_ssd
         for (int j = 0; j < reqs[req_id].num_items; j++)
             for (int k = lane_id; k < ITEM_SIZE / 8; k += WARP_SIZE)
                 ((uint64_t *)reqs[req_id].dest_addr[j])[k] = IO_buf_base[ssd_id][queue_id * QUEUE_DEPTH * MAX_IO_SIZE / 8 + sq_pos * MAX_IO_SIZE / 8 + j * ITEM_SIZE / 8 + k];
-        // if (id_in_queue == 0)
-        // {
-        //     int cnt = ssd_num_reqs[ssd_id] - queue_id * (QUEUE_DEPTH - 1);
-        //     if (cnt > QUEUE_DEPTH - 1)
-        //         cnt = QUEUE_DEPTH - 1;
-        //     ssdqp[global_queue_id].num_completed += cnt;
-        //     ssdqp[global_queue_id].cq_head = (ssdqp[global_queue_id].cq_head + cnt) % QUEUE_DEPTH;
-        //     *ssdqp[global_queue_id].cqhdbl = ssdqp[global_queue_id].cq_head;
-        // }
     }
 }
 
-__global__ static void ring_cq_doorbell_kernel(int num_ssds, int num_queues_per_ssd, SSDQueuePair *ssdqp, int* ssd_num_reqs, int* ssd_num_reqs_prefix_sum)
+__global__ static void ring_cq_doorbell_kernel(int num_ssds, int num_queues_per_ssd, SSDQueuePair *ssdqp, int *ssd_num_reqs, int *ssd_num_reqs_prefix_sum, int num_reqs)
 {
     int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
-    int ssd_id = req_id_to_ssd_id(thread_id, num_ssds, ssd_num_reqs_prefix_sum);
-    if (ssd_id >= num_ssds)
-        return;
-    int req_offset = thread_id - (ssd_id == 0 ? 0 : ssd_num_reqs_prefix_sum[ssd_id - 1]);
-    int queue_id = req_offset / (QUEUE_DEPTH - 1);
-    assert(queue_id < num_queues_per_ssd);
-    int global_queue_id = ssd_id * num_queues_per_ssd + queue_id;
-    int id_in_queue = req_offset % (QUEUE_DEPTH - 1);
-
-    if (id_in_queue == 0)
+    int num_threads = blockDim.x * gridDim.x;
+    for (int i = thread_id; i < num_reqs; i += num_threads)
     {
-        int cnt = ssd_num_reqs[ssd_id] - queue_id * (QUEUE_DEPTH - 1);
-        if (cnt > QUEUE_DEPTH - 1)
-            cnt = QUEUE_DEPTH - 1;
-        ssdqp[global_queue_id].num_completed += cnt;
-        ssdqp[global_queue_id].cq_head = (ssdqp[global_queue_id].cq_head + cnt) % QUEUE_DEPTH;
-        *ssdqp[global_queue_id].cqhdbl = ssdqp[global_queue_id].cq_head;
+        int ssd_id = req_id_to_ssd_id(thread_id, num_ssds, ssd_num_reqs_prefix_sum);
+        if (ssd_id >= num_ssds)
+            break;
+        int req_offset = thread_id - (ssd_id == 0 ? 0 : ssd_num_reqs_prefix_sum[ssd_id - 1]);
+        int queue_id = req_offset / (QUEUE_DEPTH - 1);
+        assert(queue_id < num_queues_per_ssd);
+        int global_queue_id = ssd_id * num_queues_per_ssd + queue_id;
+        int id_in_queue = req_offset % (QUEUE_DEPTH - 1);
+
+        if (id_in_queue == 0)
+        {
+            int cnt = ssd_num_reqs[ssd_id] - queue_id * (QUEUE_DEPTH - 1);
+            if (cnt > QUEUE_DEPTH - 1)
+                cnt = QUEUE_DEPTH - 1;
+            ssdqp[global_queue_id].num_completed += cnt;
+            ssdqp[global_queue_id].cq_head = (ssdqp[global_queue_id].cq_head + cnt) % QUEUE_DEPTH;
+            *ssdqp[global_queue_id].cqhdbl = ssdqp[global_queue_id].cq_head;
+        }
     }
 }
 
@@ -348,7 +351,7 @@ public:
         cudaMemsetAsync(ssd_num_reqs_prefix_sum_, 0, sizeof(int) * num_ssds_, stream);
         cudaCheckError();
 
-        preprocess_io_req_1<<<100, NUM_THREADS_PER_BLOCK, 0, stream>>>(reqs, num_reqs, num_ssds_, num_queues_per_ssd_, ssd_num_reqs_);
+        preprocess_io_req_1<<<32, NUM_THREADS_PER_BLOCK, 0, stream>>>(reqs, num_reqs, num_ssds_, num_queues_per_ssd_, ssd_num_reqs_);
         cudaCheckError();
         preprocess_io_req_2<<<1, 1, 0, stream>>>(reqs, num_reqs, num_ssds_, num_queues_per_ssd_, ssd_num_reqs_, ssd_num_reqs_prefix_sum_);
         cudaCheckError();
@@ -356,7 +359,7 @@ public:
         distribute_io_req_1<<<1, 1, 0, stream>>>(reqs, num_reqs, num_ssds_, num_queues_per_ssd_, distributed_reqs_, ssd_num_reqs_prefix_sum_);
         cudaCheckError();
 
-        distribute_io_req_2<<<100, NUM_THREADS_PER_BLOCK, 0, stream>>>(reqs, num_reqs, num_ssds_, num_queues_per_ssd_, distributed_reqs_);
+        distribute_io_req_2<<<32, NUM_THREADS_PER_BLOCK, 0, stream>>>(reqs, num_reqs, num_ssds_, num_queues_per_ssd_, distributed_reqs_);
         cudaCheckError();
 
         distribute_io_req_3<<<1, 1, 0, stream>>>(reqs, num_reqs, num_ssds_, num_queues_per_ssd_, distributed_reqs_, ssd_num_reqs_prefix_sum_);
@@ -367,11 +370,11 @@ public:
         // // float ms;
         // // CHECK(cudaEventElapsedTime(&ms, start, stop));
         // // fprintf(stderr, "distribute takes %f ms\n", ms);
-        int num_blocks = (num_reqs + NUM_THREADS_PER_BLOCK - 1) / NUM_THREADS_PER_BLOCK;
+        int num_blocks = 32;
         submit_io_req_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(distributed_reqs_, num_reqs, num_ssds_, num_queues_per_ssd_, d_ssdqp_, d_prp1_, d_IO_buf_base_, d_prp2_, ssd_num_reqs_prefix_sum_);
         cudaCheckError();
 
-        ring_sq_doorbell_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(num_ssds_, num_queues_per_ssd_, d_ssdqp_, ssd_num_reqs_, ssd_num_reqs_prefix_sum_);
+        ring_sq_doorbell_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(num_ssds_, num_queues_per_ssd_, d_ssdqp_, ssd_num_reqs_, ssd_num_reqs_prefix_sum_, num_reqs);
         cudaCheckError();
 
         // CHECK(cudaDeviceSynchronize());
@@ -381,7 +384,7 @@ public:
         copy_io_req_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(distributed_reqs_, num_reqs, num_ssds_, num_queues_per_ssd_, d_ssdqp_, d_prp1_, d_IO_buf_base_, d_prp2_, ssd_num_reqs_prefix_sum_);
         cudaCheckError();
 
-        ring_cq_doorbell_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(num_ssds_, num_queues_per_ssd_, d_ssdqp_, ssd_num_reqs_, ssd_num_reqs_prefix_sum_);
+        ring_cq_doorbell_kernel<<<num_blocks, NUM_THREADS_PER_BLOCK, 0, stream>>>(num_ssds_, num_queues_per_ssd_, d_ssdqp_, ssd_num_reqs_, ssd_num_reqs_prefix_sum_, num_reqs);
         cudaCheckError();
 
     }
