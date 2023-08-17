@@ -178,6 +178,7 @@ __global__ static void copy_io_req_kernel(IOReq *reqs, int num_reqs, int num_ssd
 
         if (lane_id == 0)
         {
+            // printf("polling req %d ssd %d queue %d complete_id %d queue_pos %d num_completed %d\n", i, ssd_id, queue_id, complete_id, queue_pos, ssdqp[global_queue_id].num_completed);
             uint32_t current_phase = (complete_id / QUEUE_DEPTH) & 1;
             while (((ssdqp[global_queue_id].cq[queue_pos * 4 + 3] & PHASE_MASK) >> 16) == current_phase)
                 ;
@@ -205,10 +206,10 @@ __global__ static void ring_cq_doorbell_kernel(int num_ssds, int num_queues_per_
     int num_threads = blockDim.x * gridDim.x;
     for (int i = thread_id; i < num_reqs; i += num_threads)
     {
-        int ssd_id = req_id_to_ssd_id(thread_id, num_ssds, ssd_num_reqs_prefix_sum);
+        int ssd_id = req_id_to_ssd_id(i, num_ssds, ssd_num_reqs_prefix_sum);
         if (ssd_id >= num_ssds)
             break;
-        int req_offset = thread_id - (ssd_id == 0 ? 0 : ssd_num_reqs_prefix_sum[ssd_id - 1]);
+        int req_offset = i - (ssd_id == 0 ? 0 : ssd_num_reqs_prefix_sum[ssd_id - 1]);
         int queue_id = req_offset / (QUEUE_DEPTH - 1);
         assert(queue_id < num_queues_per_ssd);
         int global_queue_id = ssd_id * num_queues_per_ssd + queue_id;
@@ -222,6 +223,7 @@ __global__ static void ring_cq_doorbell_kernel(int num_ssds, int num_queues_per_
             ssdqp[global_queue_id].num_completed += cnt;
             ssdqp[global_queue_id].cq_head = (ssdqp[global_queue_id].cq_head + cnt) % QUEUE_DEPTH;
             *ssdqp[global_queue_id].cqhdbl = ssdqp[global_queue_id].cq_head;
+            // printf("queue %d num_completed %d cq_head %d\n", global_queue_id, ssdqp[global_queue_id].num_completed, ssdqp[global_queue_id].cq_head);
         }
     }
 }
